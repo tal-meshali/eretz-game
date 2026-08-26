@@ -18,3 +18,21 @@ input, select {
   font: inherit; border-radius: 10px; border: 1px solid #2c4257;
   background: #0b1420; color: var(--text); padding: 10px;
 }
+
+#root, .screen { min-height: 100dvh; display: flex; flex-direction: column; }
+.screen { padding: 16px; gap: 16px; max-width: 720px; margin: 0 auto; width: 100%; }
+.card { background: var(--card); border-radius: 14px; padding: 16px; }
+.map { flex: 1; min-height: 55dvh; border-radius: 14px; }
+.pin-tip { background: rgba(0,0,0,0.75); color: #fff; border: 0; direction: rtl; }
+.hud { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.locality-name { font-size: 1.7rem; font-weight: 800; margin: 0; }
+.timebar { height: 8px; border-radius: 4px; background: #24384c; overflow: hidden; }
+.timebar > div { height: 100%; background: var(--accent); transition: width 0.25s linear; }
+.timebar.low > div { background: var(--danger); }
+table.scores { width: 100%; border-collapse: collapse; }
+table.scores td, table.scores th { padding: 8px; text-align: right; border-bottom: 1px solid #24384c; }
+.podium { display: flex; gap: 10px; align-items: flex-end; justify-content: center; }
+.podium .slot { background: var(--card); border-radius: 12px 12px 0 0; padding: 12px; text-align: center; flex: 1; }
+.muted { color: var(--muted); }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+label.field { display: flex; flex-direction: column; gap: 6px; }
