@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type * as L from 'leaflet'
 import MapView, { type Pin } from './MapView'
 import { currentRound, currentRoundIndex, deadlineOf } from '../game/derive'
@@ -18,6 +18,11 @@ export default function RoundView({ room, nowMs, myUid, myGuess, onConfirm, onMa
   const [pick, setPick] = useState<{ lat: number; lng: number } | null>(null)
   const round = currentRound(room)!
   const index = currentRoundIndex(room)
+
+  useEffect(() => {
+    setPick(null)
+  }, [index])
+
   const target = localityById(round.localityId)
   const secondsLeft = Math.max(0, Math.ceil((deadlineOf(round, room.config) - nowMs) / 1000))
   const fraction = secondsLeft / room.config.seconds

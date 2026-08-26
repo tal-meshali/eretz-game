@@ -71,6 +71,43 @@ describe('RoundView', () => {
     )
     expect(screen.getByText(/ההימור נקלט/)).toBeInTheDocument()
   })
+
+  test('resets the tentative pick when the round advances', async () => {
+    const onConfirm = vi.fn()
+    let map: L.Map | null = null
+    const { rerender } = render(
+      <RoundView
+        room={playingRoom()}
+        nowMs={T0 + 5000}
+        myUid="p"
+        myGuess={null}
+        onConfirm={onConfirm}
+        onMapReady={(m) => (map = m)}
+      />,
+    )
+    act(() => {
+      map!.fire('click', { latlng: { lat: 32.1, lng: 34.9 } })
+    })
+    expect(screen.getByRole('button', { name: 'אישור' })).not.toBeDisabled()
+
+    const T1 = T0 + 30000
+    rerender(
+      <RoundView
+        room={playingRoom({
+          rounds: [
+            { localityId: LOC.id, startedAt: T0, revealAt: T0 + 20000 },
+            { localityId: LOC.id, startedAt: T1 },
+          ],
+        })}
+        nowMs={T1 + 1000}
+        myUid="p"
+        myGuess={null}
+        onConfirm={onConfirm}
+        onMapReady={(m) => (map = m)}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'אישור' })).toBeDisabled()
+  })
 })
 
 describe('RevealView', () => {
