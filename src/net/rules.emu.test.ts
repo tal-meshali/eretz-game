@@ -94,4 +94,16 @@ describe('room security rules', () => {
     await assertSucceeds(set(ref(dbAs('bob'), 'rooms/OLDR'), null))
     await assertFails(set(ref(dbAs('bob'), 'rooms/NEWR'), null))
   })
+
+  test('a createdAt-less ghost room is deletable at any age', async () => {
+    // Ghosts predating the join hardening have no createdAt, so the 24h
+    // comparison is never true — without this carve-out they are immortal
+    // and cleanupStaleRooms can never purge them.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await set(ref(ctx.database(), 'rooms/GHST'), {
+        players: { bob: { name: 'בוב', joinedAt: 2, online: true } },
+      })
+    })
+    await assertSucceeds(set(ref(dbAs('alice'), 'rooms/GHST'), null))
+  })
 })
