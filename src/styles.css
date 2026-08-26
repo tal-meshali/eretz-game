@@ -49,6 +49,9 @@
   --map-border: rgba(29, 31, 32, 0.42);
   --map-border-strong: #1d1f20;
   --map-grid: rgba(29, 31, 32, 0.09);
+  --map-desert: #f0e8d4;
+  --map-forest: #d8e3d0;
+  --map-urban: #dddde1;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -240,6 +243,9 @@ input:focus-visible, select:focus-visible { border-color: var(--color-accent); o
 .map { flex: 1; min-height: 100%; background: var(--map-sea); }
 .map .leaflet-container { background: var(--map-sea); font: inherit; }
 .readout {
+  /* Purely a readout: it must never eat taps aimed at the map's southern
+     edge (Eilat sits right under it in the country fit). */
+  pointer-events: none;
   position: absolute; inset-inline: 0; bottom: 0;
   display: flex; justify-content: space-between; gap: var(--space-3);
   padding: 6px 9px;

@@ -7,7 +7,10 @@ import geo from '../data/geo.json'
 type Coord = [number, number]
 type Ring = Coord[]
 interface GeoFeature {
-  properties: { role: 'neigh' | 'ps' | 'il' | 'water'; name: string }
+  properties: {
+    role: 'neigh' | 'ps' | 'il' | 'desert' | 'forest' | 'urban' | 'water' | 'il-line'
+    name: string
+  }
   geometry:
     | { type: 'Polygon'; coordinates: Ring[] }
     | { type: 'MultiPolygon'; coordinates: Ring[][] }
@@ -80,8 +83,21 @@ export default function HeroMap({ className }: { className?: string }) {
         <path key={f.properties.name} d={featurePath(f)} fill="var(--map-land)"
           stroke="var(--map-border-strong)" strokeWidth="2.2" />
       ))}
+      {byRole('desert').map((f) => (
+        <path key={f.properties.name} d={featurePath(f)} fill="var(--map-desert)" />
+      ))}
+      {byRole('forest').map((f) => (
+        <path key={f.properties.name} d={featurePath(f)} fill="var(--map-forest)" />
+      ))}
+      {byRole('urban').map((f, i) => (
+        <path key={`${f.properties.name}-${i}`} d={featurePath(f)} fill="var(--map-urban)" />
+      ))}
       {byRole('water').map((f) => (
         <path key={f.properties.name} d={featurePath(f)} fill="var(--map-water)" />
+      ))}
+      {byRole('il-line').map((f) => (
+        <path key={f.properties.name} d={featurePath(f)} fill="none"
+          stroke="var(--map-border-strong)" strokeWidth="2.2" />
       ))}
       {GRID.map((l, i) => (
         <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}

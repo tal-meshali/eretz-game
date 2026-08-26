@@ -31,7 +31,7 @@ export interface MapViewProps {
   onMapReady?: (map: L.Map) => void
 }
 
-type Role = 'neigh' | 'ps' | 'il' | 'water'
+type Role = 'neigh' | 'ps' | 'il' | 'desert' | 'forest' | 'urban' | 'water' | 'il-line'
 interface GeoFeature {
   type: 'Feature'
   properties: { role: Role; name: string }
@@ -48,6 +48,9 @@ interface Tokens {
   land: string
   landAlt: string
   neigh: string
+  desert: string
+  forest: string
+  urban: string
   water: string
   border: string
   borderStrong: string
@@ -66,6 +69,9 @@ function readTokens(el: HTMLElement): Tokens {
     land: v('--map-land', '#f6f6f7'),
     landAlt: v('--map-land-alt', '#edeef0'),
     neigh: v('--map-neigh', '#e7e7ea'),
+    desert: v('--map-desert', '#f0e8d4'),
+    forest: v('--map-forest', '#d8e3d0'),
+    urban: v('--map-urban', '#dddde1'),
     water: v('--map-water', '#b5d9fd'),
     border: v('--map-border', 'rgba(29,31,32,.42)'),
     borderStrong: v('--map-border-strong', '#1d1f20'),
@@ -84,8 +90,18 @@ function styleFor(t: Tokens) {
           fillColor: t.landAlt, fillOpacity: 1,
           color: t.borderStrong, weight: 1, dashArray: '5 4', opacity: 0.8,
         }
+      case 'desert':
+        return { fillColor: t.desert, fillOpacity: 1, stroke: false }
+      case 'forest':
+        return { fillColor: t.forest, fillOpacity: 1, stroke: false }
+      case 'urban':
+        return { fillColor: t.urban, fillOpacity: 1, stroke: false }
       case 'water':
         return { fillColor: t.water, fillOpacity: 1, stroke: false }
+      case 'il-line':
+        // The land washes cover the inner half of the border stroke, so the
+        // border is re-drawn fill-less on top (last in the feature order).
+        return { fill: false, color: t.borderStrong, weight: 1.5 }
       default:
         return { fillColor: t.neigh, fillOpacity: 1, color: t.border, weight: 1 }
     }
@@ -121,6 +137,11 @@ export default function MapView({
   // Value signature of the overlay inputs: the app re-renders on a 4 Hz clock,
   // and rebuilding markers every tick would blow away Leaflet's DOM.
   const sigRef = useRef<string>('')
+  // Once the player has zoomed or panned, resize refits stop overriding them
+  // (mobile browser chrome showing/hiding fires resizes constantly). A new
+  // fitTo value takes the frame back.
+  const userMovedRef = useRef(false)
+  const fittingRef = useRef(false)
   const onPickRef = useRef(onPick)
   onPickRef.current = onPick
 
@@ -129,7 +150,17 @@ export default function MapView({
     // fitBounds has nothing to solve against — the initial center/zoom stands.
     const size = map.getSize()
     if (size.x <= 0 || size.y <= 0) return
-    map.fitBounds(fitRef.current, { padding: [8, 8], animate: false, maxZoom: 11 })
+    fittingRef.current = true
+    // The whole-country fit is the floor: you can zoom in from it, not out.
+    map.setMinZoom(map.getBoundsZoom(ISRAEL_BOUNDS) - 0.2)
+    map.fitBounds(fitRef.current, {
+      // Extra bottom room keeps the southern tip clear of the readout bar.
+      paddingTopLeft: [8, 8],
+      paddingBottomRight: [8, 30],
+      animate: false,
+      maxZoom: 11,
+    })
+    fittingRef.current = false
   }
 
   useEffect(() => {
@@ -143,16 +174,22 @@ export default function MapView({
       zoomSnap: 0,
       attributionControl: false,
       zoomControl: false,
-      // The plate is a fixed survey chart: no panning, no zooming, so a guess
-      // is always made at the same scale.
-      dragging: false,
-      scrollWheelZoom: false,
-      doubleClickZoom: false,
-      touchZoom: false,
+      // The plate opens as a fixed survey chart, but a fingertip needs zoom:
+      // Eilat is a 10 km wedge. Panning is confined to the chart itself.
+      dragging: true,
+      scrollWheelZoom: true,
+      doubleClickZoom: true,
+      touchZoom: true,
       boxZoom: false,
       keyboard: false,
+      maxZoom: 13,
+      maxBounds: ISRAEL_BOUNDS.pad(0.35),
+      maxBoundsViscosity: 1,
     })
     applyFit(map)
+    map.on('zoomstart movestart', () => {
+      if (!fittingRef.current) userMovedRef.current = true
+    })
 
     for (const line of graticule(t)) line.addTo(map)
     L.geoJSON(geo as never, { style: styleFor(t), interactive: false }).addTo(map)
@@ -171,7 +208,7 @@ export default function MapView({
     if (typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver(() => {
         map.invalidateSize({ animate: false })
-        applyFit(map)
+        if (!userMovedRef.current) applyFit(map)
       })
       ro.observe(el)
     }
@@ -190,6 +227,7 @@ export default function MapView({
       fitTo && fitTo.length > 0
         ? L.latLngBounds(fitTo.map((p) => L.latLng(p.lat, p.lng))).pad(0.4)
         : ISRAEL_BOUNDS
+    userMovedRef.current = false
     applyFit(map)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(fitTo)])
