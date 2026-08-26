@@ -17,9 +17,8 @@ const room: Room = {
 describe('Lobby', () => {
   test('lists players', () => {
     render(<Lobby room={room} shareUrl="https://x/#ABCD" isHost={false} onStart={vi.fn()} />)
-    const playersList = screen.getByRole('list')
-    expect(playersList.textContent).toContain('מארח')
-    expect(playersList.textContent).toContain('שחקן')
+    expect(screen.getByText('מארח')).toBeTruthy()
+    expect(screen.getByText('שחקן')).toBeTruthy()
   })
   test('start button only for host, needs 2+ players', () => {
     const { rerender } = render(

@@ -14,6 +14,7 @@ export default function Landing({ joinCode, onCreate, onJoin }: LandingProps) {
   const [rounds, setRounds] = useState(10)
   const [seconds, setSeconds] = useState(20)
   const trimmed = name.trim()
+  const isValidConfig = rounds >= 3 && rounds <= 20 && seconds >= 10 && seconds <= 60
 
   return (
     <div className="screen">
@@ -69,7 +70,7 @@ export default function Landing({ joinCode, onCreate, onJoin }: LandingProps) {
                 />
               </label>
             </div>
-            <button disabled={!trimmed} onClick={() => onCreate(trimmed, { rounds, seconds, difficulty })}>
+            <button disabled={!trimmed || !isValidConfig} onClick={() => onCreate(trimmed, { rounds, seconds, difficulty })}>
               צור חדר
             </button>
           </>

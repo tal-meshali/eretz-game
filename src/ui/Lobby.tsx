@@ -32,7 +32,7 @@ export default function Lobby({ room, shareUrl, isHost, onStart }: LobbyProps) {
         <ul>
           {players.map(([uid, p]) => (
             <li key={uid}>
-              {p.name} {p.online ? '🟢' : '⚪'} {uid === room.hostUid ? '· מארח' : ''}
+              <span>{p.name}</span> {p.online ? '🟢' : '⚪'} {uid === room.hostUid ? '·מארח' : ''}
             </li>
           ))}
         </ul>

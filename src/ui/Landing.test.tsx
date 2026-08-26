@@ -15,6 +15,21 @@ describe('Landing — create mode', () => {
     render(<Landing joinCode={null} onCreate={vi.fn()} onJoin={vi.fn()} />)
     expect(screen.getByRole('button', { name: 'צור חדר' })).toBeDisabled()
   })
+  test('create button disabled with invalid config', async () => {
+    render(<Landing joinCode={null} onCreate={vi.fn()} onJoin={vi.fn()} />)
+    await userEvent.type(screen.getByLabelText('כינוי'), 'טל')
+    const button = screen.getByRole('button', { name: 'צור חדר' })
+    expect(button).toBeEnabled()
+
+    // Clear סבבים field
+    const roundsInput = screen.getByDisplayValue('10')
+    await userEvent.clear(roundsInput)
+    expect(button).toBeDisabled()
+
+    // Restore valid value
+    await userEvent.type(roundsInput, '5')
+    expect(button).toBeEnabled()
+  })
 })
 
 describe('Landing — join mode', () => {
