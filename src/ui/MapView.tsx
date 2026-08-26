@@ -49,11 +49,14 @@ export default function MapView({ pins = [], onPick, onMapReady }: MapViewProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Keyed by value, not array identity: parents rebuild `pins` on every clock
+  // tick, and recreating layers mid-zoom detaches tooltips from their pins.
+  const pinsKey = JSON.stringify(pins)
   useEffect(() => {
     const layer = pinLayerRef.current
     if (!layer) return
     layer.clearLayers()
-    for (const pin of pins) {
+    for (const pin of JSON.parse(pinsKey) as Pin[]) {
       L.circleMarker([pin.lat, pin.lng], {
         radius: pin.kind === 'answer' ? 12 : 8,
         color: '#fff',
@@ -64,7 +67,10 @@ export default function MapView({ pins = [], onPick, onMapReady }: MapViewProps)
         .bindTooltip(pin.label, { permanent: true, direction: 'top', className: 'pin-tip' })
         .addTo(layer)
     }
-  }, [pins])
+  }, [pinsKey])
 
-  return <div ref={elRef} className="map" />
+  // dir="ltr": Leaflet's pane/tooltip transform math assumes an LTR static
+  // position; under the page's RTL direction every tooltip shifts left by its
+  // own width. Tooltip text stays RTL via .pin-tip.
+  return <div ref={elRef} className="map" dir="ltr" />
 }
