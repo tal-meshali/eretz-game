@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import type { Room } from '../types'
 import {
   REVEAL_MS,
+  currentRound,
   currentRoundIndex,
   deadlineOf,
   eligibleHost,
@@ -59,9 +60,12 @@ describe('phaseOf / currentRoundIndex', () => {
       rounds: [null, { localityId: 10, startedAt: T0, revealAt: T0 + 20000 }],
     })
     expect(currentRoundIndex(r)).toBe(1)
-    const current = r.rounds![currentRoundIndex(r)]
+    const current = currentRound(r)
     expect(current).not.toBeNull()
     expect(current?.localityId).toBe(10)
+  })
+  test('currentRound returns null for lobby room with no rounds', () => {
+    expect(currentRound(room())).toBeNull()
   })
 })
 
