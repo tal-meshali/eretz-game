@@ -11,6 +11,12 @@ import RoundView from './ui/RoundView'
 import RevealView from './ui/RevealView'
 import FinalView from './ui/FinalView'
 
+// A room doc can transiently exist with only a `players` subtree (join/delete race,
+// or presence resurrection) — treat that as no room rather than crashing downstream.
+function isValidRoom(room: Room | null): room is Room {
+  return !!room && !!room.config && !!room.state
+}
+
 export default function App() {
   const [uid, setUid] = useState<string | null>(null)
   const [client, setClient] = useState<RoomClient | null>(null)
@@ -47,15 +53,19 @@ export default function App() {
     return client.watchRoom(code, setRoom)
   }, [client, code])
 
-  const joined = !!(uid && room?.players?.[uid])
+  const validRoom = isValidRoom(room) ? room : null
+  const joined = !!(uid && validRoom?.players?.[uid])
 
   useEffect(() => {
-    if (client && code && joined) client.setupPresence(code)
+    if (client && code && joined) {
+      client.setupPresence(code)
+      return () => client.teardownPresence()
+    }
   }, [client, code, joined])
 
   // Host engine + host migration — driven by the clock tick.
   useEffect(() => {
-    if (!client || !code || !room || !uid || !joined || busyRef.current) return
+    if (!client || !code || !validRoom || !uid || !joined || busyRef.current) return
     const run = async (job: Promise<void>) => {
       busyRef.current = true
       try {
@@ -64,17 +74,17 @@ export default function App() {
         busyRef.current = false
       }
     }
-    const storedHost = room.players[room.hostUid]
-    if ((!storedHost || !storedHost.online) && eligibleHost(room.players) === uid) {
+    const storedHost = validRoom.players[validRoom.hostUid]
+    if ((!storedHost || !storedHost.online) && eligibleHost(validRoom.players) === uid) {
       void run(client.claimHost(code))
       return
     }
-    if (room.hostUid !== uid) return
-    const action = hostAction(room, now)
-    if (action.type === 'close') void run(client.closeRound(code, currentRoundIndex(room)))
-    else if (action.type === 'next') void run(client.startNextRound(code, room))
+    if (validRoom.hostUid !== uid) return
+    const action = hostAction(validRoom, now)
+    if (action.type === 'close') void run(client.closeRound(code, currentRoundIndex(validRoom)))
+    else if (action.type === 'next') void run(client.startNextRound(code, validRoom))
     else if (action.type === 'finish') void run(client.finishGame(code))
-  }, [client, code, room, uid, joined, now])
+  }, [client, code, validRoom, uid, joined, now])
 
   if (!isConfigured()) {
     return (
@@ -96,7 +106,7 @@ export default function App() {
   }
 
   if (!code) return <Landing joinCode={null} onCreate={createAndEnter} onJoin={() => {}} />
-  if (room === null || !joined) {
+  if (validRoom === null || !joined) {
     return (
       <Landing
         joinCode={code}
@@ -110,26 +120,31 @@ export default function App() {
     )
   }
 
-  const phase = phaseOf(room)
+  const phase = phaseOf(validRoom)
   const shareUrl = `${window.location.origin}${window.location.pathname}#${code}`
-  const isHost = room.hostUid === uid
+  const isHost = validRoom.hostUid === uid
 
   if (phase === 'lobby')
     return (
-      <Lobby room={room} shareUrl={shareUrl} isHost={isHost} onStart={() => client.startGame(code, room)} />
+      <Lobby
+        room={validRoom}
+        shareUrl={shareUrl}
+        isHost={isHost}
+        onStart={() => client.startGame(code, validRoom)}
+      />
     )
   if (phase === 'guessing') {
-    const i = currentRoundIndex(room)
+    const i = currentRoundIndex(validRoom)
     return (
       <RoundView
-        room={room}
+        room={validRoom}
         nowMs={now}
         myUid={uid}
-        myGuess={room.guesses?.[i]?.[uid] ?? null}
+        myGuess={validRoom.guesses?.[i]?.[uid] ?? null}
         onConfirm={(p) => client.submitGuess(code, i, p)}
       />
     )
   }
-  if (phase === 'reveal') return <RevealView room={room} nowMs={now} myUid={uid} />
-  return <FinalView room={room} isHost={isHost} onPlayAgain={() => client.playAgain(code)} />
+  if (phase === 'reveal') return <RevealView room={validRoom} nowMs={now} myUid={uid} />
+  return <FinalView room={validRoom} isHost={isHost} onPlayAgain={() => client.playAgain(code)} />
 }

@@ -15,6 +15,7 @@ const mockClient = {
     return () => {}
   }),
   setupPresence: vi.fn(),
+  teardownPresence: vi.fn(),
   startGame: vi.fn(async () => {}),
   submitGuess: vi.fn(async () => {}),
   closeRound: vi.fn(async () => {}),
@@ -79,6 +80,43 @@ describe('App', () => {
     act(() => roomCb!(baseRoom()))
     expect(await screen.findByText('חדר המתנה')).toBeInTheDocument()
     expect(mockClient.setupPresence).toHaveBeenCalledWith('ABCD')
+  })
+
+  test('leaving the room (unmount) tears down presence', async () => {
+    window.location.hash = '#ABCD'
+    const { unmount } = render(<App />)
+    await screen.findByLabelText('כינוי')
+    act(() => roomCb!(baseRoom()))
+    await screen.findByText('חדר המתנה')
+    expect(mockClient.setupPresence).toHaveBeenCalledWith('ABCD')
+    expect(mockClient.teardownPresence).not.toHaveBeenCalled()
+    unmount()
+    expect(mockClient.teardownPresence).toHaveBeenCalledTimes(1)
+  })
+
+  test('back button (hash cleared) tears down presence', async () => {
+    window.location.hash = '#ABCD'
+    render(<App />)
+    await screen.findByLabelText('כינוי')
+    act(() => roomCb!(baseRoom()))
+    await screen.findByText('חדר המתנה')
+    act(() => {
+      window.location.hash = ''
+      window.dispatchEvent(new Event('hashchange'))
+    })
+    await vi.waitFor(() => expect(mockClient.teardownPresence).toHaveBeenCalledTimes(1))
+  })
+
+  test('malformed room (missing config/state) falls back to join landing instead of crashing', async () => {
+    window.location.hash = '#ABCD'
+    render(<App />)
+    await screen.findByLabelText('כינוי')
+    act(() =>
+      roomCb!(
+        { players: { me: { name: 'אני', joinedAt: 1, online: true } } } as unknown as Room,
+      ),
+    )
+    expect(await screen.findByRole('button', { name: 'הצטרפות' })).toBeInTheDocument()
   })
 
   test('playing room → round screen; finished → final screen', async () => {

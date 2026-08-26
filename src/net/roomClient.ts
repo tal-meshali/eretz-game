@@ -59,13 +59,16 @@ export function createRoomClient(db: Database, uid: string) {
 
   let presence: { unsubscribe: () => void; onlineRef: DatabaseReference } | null = null
 
+  function teardownPresence(): void {
+    if (!presence) return
+    presence.unsubscribe()
+    onDisconnect(presence.onlineRef).cancel()
+    set(presence.onlineRef, false).catch(() => {})
+    presence = null
+  }
+
   function setupPresence(code: string): void {
-    if (presence) {
-      presence.unsubscribe()
-      onDisconnect(presence.onlineRef).cancel()
-      set(presence.onlineRef, false).catch(() => {})
-      presence = null
-    }
+    teardownPresence()
     const onlineRef = ref(db, `rooms/${code}/players/${uid}/online`)
     const unsubscribe = onValue(ref(db, '.info/connected'), (snap) => {
       if (!snap.val()) return
@@ -131,6 +134,7 @@ export function createRoomClient(db: Database, uid: string) {
     joinRoom,
     watchRoom,
     setupPresence,
+    teardownPresence,
     startGame,
     submitGuess,
     closeRound,

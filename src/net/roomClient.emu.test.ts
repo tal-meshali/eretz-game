@@ -113,6 +113,18 @@ describe('roomClient full game flow', () => {
     expect(roomA.players[host.uid].online).toBe(false)
   })
 
+  test('teardownPresence marks the player offline and stops the listener', async () => {
+    const code = await host.client.createRoom(CONFIG, 'מארח')
+
+    host.client.setupPresence(code)
+    await waitForRoom(host.client, code, (r) => r.players[host.uid].online === true)
+
+    host.client.teardownPresence()
+    const room = await waitForRoom(host.client, code, (r) => r.players[host.uid].online === false)
+
+    expect(room.players[host.uid].online).toBe(false)
+  })
+
   test('cleanupStaleRooms deletes only 24h+ rooms', async () => {
     const staleCode = 'ZOLD'
     const db = getDatabase(apps[0])
