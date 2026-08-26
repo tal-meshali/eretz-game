@@ -2,46 +2,44 @@
 //
 //   node scripts/build-geo.mjs
 //
-// Sources (all public domain):
-//   - Natural Earth 1:50m admin-0 via the world-atlas TopoJSON bundle:
-//     sea, land, national borders.
-//   - Natural Earth 1:10m urban areas (nightlights-derived): the grey
-//     built-up patches. Note this layer has a size floor — Eilat, for one,
-//     is under it — so it hints at the metros, not at most answers.
+// Sources (all public domain, Natural Earth 1:10m; the files blow jsdelivr's
+// 20 MB cap, so they come from raw.githubusercontent):
+//   - admin-0 countries: coastline and national borders.
+//   - lakes: the real outlines of the Kinneret and the Dead Sea basins.
+//   - urban areas (nightlights-derived): the grey built-up patches. This
+//     layer has a size floor — Eilat, for one, is under it — so it hints at
+//     the metros, not at most answers.
+// The 'sea' feature is derived: the regional window minus every country, so
+// its coast is the exact same line the land is drawn with.
 //
 // Schematic geometry (NOT traced from a source):
-//   - The Kinneret and the Dead Sea, as ellipses on their real centres at
-//     their real N-S / E-W extents. The dataset ships no lake layer, and
-//     without them an Israeli player has no landmark to navigate by.
 //   - The desert wash: everything of Israel south of a hand-drawn line that
 //     approximates the 200 mm rainfall boundary (Negev, Arava, Judean
 //     desert rim), clipped to the real border.
 //   - The forest patches: hand-placed ellipses over the big KKL/natural
 //     blocks (Galilee, Carmel, Menashe, Jerusalem hills, Ben Shemen,
 //     Yatir), clipped to the real border. Indicative, not cadastral.
+//
+// Terrain itself is not in this file: MapView draws these features as
+// translucent washes over the Esri World Hillshade tile layer.
 
 import { writeFile } from 'node:fs/promises'
-import { feature } from 'topojson-client'
 import pc from 'polygon-clipping'
 
-const SRC = 'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json'
-// The 10m file blows jsdelivr's 20 MB cap, so it comes from raw.githubusercontent.
-const SRC_URBAN =
-  'https://raw.githubusercontent.com/martynafford/natural-earth-geojson/master/10m/cultural/ne_10m_urban_areas.json'
+const NE = 'https://raw.githubusercontent.com/martynafford/natural-earth-geojson/master/10m'
+const SRC_ADMIN = `${NE}/cultural/ne_10m_admin_0_countries.json`
+const SRC_LAKES = `${NE}/physical/ne_10m_lakes.json`
+const SRC_URBAN = `${NE}/cultural/ne_10m_urban_areas.json`
 const OUT = new URL('../src/data/geo.json', import.meta.url)
 
 // Regional window: rings with no vertex inside it are dropped, which is what
 // keeps Egypt and Saudi Arabia from dragging their whole coastlines along.
 const BBOX = { w: 31, e: 39, s: 26, n: 36 }
-// Urban patches only matter where the plate is actually looked at.
-const URBAN_BBOX = { w: 33.9, e: 36.6, s: 29.3, n: 33.5 }
+// Lakes and urban patches only matter where the plate is actually looked at.
+const DETAIL_BBOX = { w: 33.9, e: 36.6, s: 29.3, n: 33.5 }
 const PRECISION = 3 // ~110 m, well under one screen pixel at this scale
 
 const NEIGHBOURS = ['Egypt', 'Jordan', 'Lebanon', 'Syria', 'Saudi Arabia']
-const WATER = [
-  { name: 'Kinneret', lng: 35.593, lat: 32.816, nsKm: 21, ewKm: 13 },
-  { name: 'Dead Sea', lng: 35.47, lat: 31.5, nsKm: 74, ewKm: 15 },
-]
 
 // Hand-drawn northern edge of the desert wash, west to east; the window is
 // closed far to the south/east and intersected with the real border.
@@ -100,10 +98,13 @@ const clipToIsrael = (geometry, israel) => {
   return hit.length ? fromMulti(hit) : null
 }
 
-const topology = await (await fetch(SRC)).json()
-const countries = feature(topology, topology.objects.countries).features
+const fetchJson = async (url) => (await (await fetch(url)).json()).features
+const [admin, lakes, urban] = await Promise.all(
+  [SRC_ADMIN, SRC_LAKES, SRC_URBAN].map(fetchJson),
+)
+
 const find = (name) => {
-  const hit = countries.find((f) => f.properties.name === name)
+  const hit = admin.find((f) => (f.properties.NAME ?? f.properties.ADMIN) === name)
   if (!hit) throw new Error(`country not found in source: ${name}`)
   return hit
 }
@@ -113,11 +114,23 @@ const push = (role, name, geometry) => {
   if (geometry) features.push({ type: 'Feature', properties: { role, name }, geometry })
 }
 
-for (const name of NEIGHBOURS) push('neigh', name, trim(find(name).geometry))
-const ps = trim(find('Palestine').geometry)
-const il = trim(find('Israel').geometry)
-push('ps', 'Palestine', ps)
-push('il', 'Israel', il)
+const countries = [...NEIGHBOURS, 'Palestine', 'Israel'].map((n) => ({
+  name: n,
+  geometry: trim(find(n).geometry),
+}))
+
+// Sea: the window minus every country — its coastline is exactly theirs.
+const rect = [[[
+  [BBOX.w, BBOX.s], [BBOX.e, BBOX.s], [BBOX.e, BBOX.n], [BBOX.w, BBOX.n], [BBOX.w, BBOX.s],
+]]]
+const sea = pc.difference(rect, ...countries.map((c) => toMulti(c.geometry)))
+push('sea', 'sea', fromMulti(sea))
+
+for (const c of countries) {
+  const role = c.name === 'Israel' ? 'il' : c.name === 'Palestine' ? 'ps' : 'neigh'
+  push(role, c.name, c.geometry)
+}
+const il = countries.find((c) => c.name === 'Israel').geometry
 
 // Desert wash: the edge polyline closed around everything to its south.
 const desertWindow = {
@@ -127,13 +140,15 @@ const desertWindow = {
 push('desert', 'Negev', clipToIsrael(desertWindow, il))
 for (const f of FORESTS) push('forest', f.name, clipToIsrael(ellipse(f), il))
 
-const urban = (await (await fetch(SRC_URBAN)).json()).features
 for (const f of urban) {
-  const geometry = trim(f.geometry, URBAN_BBOX)
+  const geometry = trim(f.geometry, DETAIL_BBOX)
   if (geometry) push('urban', 'urban', geometry)
 }
 
-for (const w of WATER) push('water', w.name, ellipse(w))
+for (const f of lakes) {
+  const geometry = trim(f.geometry, DETAIL_BBOX)
+  if (geometry) push('water', f.properties.name ?? 'lake', geometry)
+}
 
 // The land washes above cover the inner half of Israel's border stroke, so a
 // fill-less copy of the border is re-drawn on top of everything.

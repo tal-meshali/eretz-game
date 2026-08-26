@@ -31,7 +31,12 @@ export interface MapViewProps {
   onMapReady?: (map: L.Map) => void
 }
 
-type Role = 'neigh' | 'ps' | 'il' | 'desert' | 'forest' | 'urban' | 'water' | 'il-line'
+type Role = 'sea' | 'neigh' | 'ps' | 'il' | 'desert' | 'forest' | 'urban' | 'water' | 'il-line'
+
+/** Real relief under the plate. Esri World Hillshade: terrain only — no
+ *  labels, no roads, nothing that could hint at an answer. */
+const HILLSHADE =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}'
 interface GeoFeature {
   type: 'Feature'
   properties: { role: Role; name: string }
@@ -80,30 +85,34 @@ function readTokens(el: HTMLElement): Tokens {
   }
 }
 
+/* Every fill is a translucent wash so the hillshade's relief reads through;
+   the sea polygon shares its coastline with the land, so the seam is exact. */
 function styleFor(t: Tokens) {
   return (feature?: { properties?: { role?: Role } }): L.PathOptions => {
     switch (feature?.properties?.role) {
+      case 'sea':
+        return { fillColor: t.sea, fillOpacity: 0.8, stroke: false }
       case 'il':
-        return { fillColor: t.land, fillOpacity: 1, color: t.borderStrong, weight: 1.5 }
+        return { fillColor: t.land, fillOpacity: 0.42, color: t.borderStrong, weight: 1.5 }
       case 'ps':
         return {
-          fillColor: t.landAlt, fillOpacity: 1,
+          fillColor: t.landAlt, fillOpacity: 0.5,
           color: t.borderStrong, weight: 1, dashArray: '5 4', opacity: 0.8,
         }
       case 'desert':
-        return { fillColor: t.desert, fillOpacity: 1, stroke: false }
+        return { fillColor: t.desert, fillOpacity: 0.5, stroke: false }
       case 'forest':
-        return { fillColor: t.forest, fillOpacity: 1, stroke: false }
+        return { fillColor: t.forest, fillOpacity: 0.55, stroke: false }
       case 'urban':
-        return { fillColor: t.urban, fillOpacity: 1, stroke: false }
+        return { fillColor: t.urban, fillOpacity: 0.65, stroke: false }
       case 'water':
-        return { fillColor: t.water, fillOpacity: 1, stroke: false }
+        return { fillColor: t.water, fillOpacity: 0.95, stroke: false }
       case 'il-line':
         // The land washes cover the inner half of the border stroke, so the
         // border is re-drawn fill-less on top (last in the feature order).
         return { fill: false, color: t.borderStrong, weight: 1.5 }
       default:
-        return { fillColor: t.neigh, fillOpacity: 1, color: t.border, weight: 1 }
+        return { fillColor: t.neigh, fillOpacity: 0.65, color: t.border, weight: 1 }
     }
   }
 }
@@ -191,8 +200,11 @@ export default function MapView({
       if (!fittingRef.current) userMovedRef.current = true
     })
 
-    for (const line of graticule(t)) line.addTo(map)
+    L.tileLayer(HILLSHADE, { maxZoom: 13 }).addTo(map)
     L.geoJSON(geo as never, { style: styleFor(t), interactive: false }).addTo(map)
+    // The grid sits above the washes — the sea is a polygon now, and the hero
+    // plate already draws its graticule over everything.
+    for (const line of graticule(t)) line.addTo(map)
 
     map.on('click', (e: L.LeafletMouseEvent) => {
       onPickRef.current?.({ lat: e.latlng.lat, lng: e.latlng.lng })

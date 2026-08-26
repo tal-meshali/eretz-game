@@ -8,7 +8,7 @@ type Coord = [number, number]
 type Ring = Coord[]
 interface GeoFeature {
   properties: {
-    role: 'neigh' | 'ps' | 'il' | 'desert' | 'forest' | 'urban' | 'water' | 'il-line'
+    role: 'sea' | 'neigh' | 'ps' | 'il' | 'desert' | 'forest' | 'urban' | 'water' | 'il-line'
     name: string
   }
   geometry:
@@ -71,32 +71,32 @@ export default function HeroMap({ className }: { className?: string }) {
       focusable="false"
     >
       <rect x="0" y="0" width={WIDTH} height={HEIGHT} fill="var(--map-sea)" />
-      {byRole('neigh').map((f) => (
-        <path key={f.properties.name} d={featurePath(f)} fill="var(--map-neigh)"
+      {byRole('neigh').map((f, i) => (
+        <path key={`neigh-${i}`} d={featurePath(f)} fill="var(--map-neigh)"
           stroke="var(--map-border)" strokeWidth="1.6" />
       ))}
-      {byRole('ps').map((f) => (
-        <path key={f.properties.name} d={featurePath(f)} fill="var(--map-land-alt)"
+      {byRole('ps').map((f, i) => (
+        <path key={`ps-${i}`} d={featurePath(f)} fill="var(--map-land-alt)"
           stroke="var(--map-border-strong)" strokeWidth="1.6" strokeDasharray="8 6" opacity="0.85" />
       ))}
-      {byRole('il').map((f) => (
-        <path key={f.properties.name} d={featurePath(f)} fill="var(--map-land)"
+      {byRole('il').map((f, i) => (
+        <path key={`il-${i}`} d={featurePath(f)} fill="var(--map-land)"
           stroke="var(--map-border-strong)" strokeWidth="2.2" />
       ))}
-      {byRole('desert').map((f) => (
-        <path key={f.properties.name} d={featurePath(f)} fill="var(--map-desert)" />
+      {byRole('desert').map((f, i) => (
+        <path key={`desert-${i}`} d={featurePath(f)} fill="var(--map-desert)" />
       ))}
-      {byRole('forest').map((f) => (
-        <path key={f.properties.name} d={featurePath(f)} fill="var(--map-forest)" />
+      {byRole('forest').map((f, i) => (
+        <path key={`forest-${i}`} d={featurePath(f)} fill="var(--map-forest)" />
       ))}
       {byRole('urban').map((f, i) => (
-        <path key={`${f.properties.name}-${i}`} d={featurePath(f)} fill="var(--map-urban)" />
+        <path key={`urban-${i}`} d={featurePath(f)} fill="var(--map-urban)" />
       ))}
-      {byRole('water').map((f) => (
-        <path key={f.properties.name} d={featurePath(f)} fill="var(--map-water)" />
+      {byRole('water').map((f, i) => (
+        <path key={`water-${i}`} d={featurePath(f)} fill="var(--map-water)" />
       ))}
-      {byRole('il-line').map((f) => (
-        <path key={f.properties.name} d={featurePath(f)} fill="none"
+      {byRole('il-line').map((f, i) => (
+        <path key={`il-line-${i}`} d={featurePath(f)} fill="none"
           stroke="var(--map-border-strong)" strokeWidth="2.2" />
       ))}
       {GRID.map((l, i) => (
