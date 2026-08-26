@@ -1,0 +1,26 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "rooms": {
+      ".read": "auth != null",
+      ".indexOn": ["createdAt"],
+      "$code": {
+        ".write": "auth != null && ((!data.exists() && newData.exists()) || (!newData.exists() && data.child('createdAt').val() < now - 86400000))",
+        "state": { ".write": "auth != null" },
+        "config": { ".write": "auth != null" },
+        "hostUid": { ".write": "auth != null" },
+        "rounds": { ".write": "auth != null" },
+        "players": {
+          "$uid": { ".write": "auth != null && auth.uid === $uid" }
+        },
+        "guesses": {
+          ".write": "auth != null && !newData.exists()",
+          "$round": {
+            "$uid": { ".write": "auth != null && auth.uid === $uid && !data.exists()" }
+          }
+        }
+      }
+    }
+  }
+}
