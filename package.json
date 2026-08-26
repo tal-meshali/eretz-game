@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "test:emu": "PATH=\"/opt/homebrew/opt/openjdk/bin:$PATH\" firebase emulators:exec --only database,auth --project demo-eretz 'vitest run --config vitest.emu.config.ts'",
     "test:e2e": "PATH=\"/opt/homebrew/opt/openjdk/bin:$PATH\" firebase emulators:exec --only database,auth --project demo-eretz 'playwright test'",
-    "build:data": "node scripts/build-localities.mjs"
+    "build:data": "node scripts/build-localities.mjs",
+    "emu": "PATH=\"/opt/homebrew/opt/openjdk/bin:$PATH\" firebase emulators:start --only database,auth --project demo-eretz"
   },
   "keywords": [],
   "author": "",
