@@ -9,8 +9,9 @@ test('two players play a round end to end', async ({ browser }) => {
   // Host creates a fast room
   await host.goto('/')
   await host.getByLabel('כינוי').fill('מארח')
-  await host.getByLabel('סבבים').fill('3')
-  await host.getByLabel('שניות לסבב').fill('15')
+  // exact: the stepper's −/+ buttons are labelled "הפחת סבבים"/"הוסף סבבים"
+  await host.getByLabel('סבבים', { exact: true }).fill('3')
+  await host.getByLabel('שניות לסבב', { exact: true }).fill('15')
   await host.getByRole('button', { name: 'צור חדר' }).click()
   await expect(host.getByText('חדר המתנה')).toBeVisible()
   const url = host.url()

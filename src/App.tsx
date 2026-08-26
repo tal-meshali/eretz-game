@@ -22,6 +22,7 @@ export default function App() {
   const [client, setClient] = useState<RoomClient | null>(null)
   const [code, setCode] = useState<string | null>(codeFromHash(window.location.hash))
   const [room, setRoom] = useState<Room | null>(null)
+  const [joinError, setJoinError] = useState<string | null>(null)
   const [now, setNow] = useState(() => serverNow())
   const busyRef = useRef(false) // one host action in flight at a time
 
@@ -46,6 +47,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    setJoinError(null)
     if (!client || !code) {
       setRoom(null)
       return
@@ -107,15 +109,27 @@ export default function App() {
 
   if (!code) return <Landing joinCode={null} onCreate={createAndEnter} onJoin={() => {}} />
   if (validRoom === null || !joined) {
+    // A failed join stays here with the code intact: silently bouncing the
+    // player to the create page reads as a broken link, and most failures
+    // are transient (cold connection, auth still propagating).
     return (
       <Landing
         joinCode={code}
+        joinError={joinError}
         onCreate={createAndEnter}
-        onJoin={(name) =>
-          client.joinRoom(code, name).catch(() => {
-            window.location.hash = ''
+        onJoin={(name) => {
+          setJoinError(null)
+          client.joinRoom(code, name).catch((e: unknown) => {
+            setJoinError(
+              e instanceof Error && e.message === 'room-not-found'
+                ? 'החדר לא נמצא — ייתכן שהקוד שגוי או שהמשחק כבר הסתיים'
+                : 'ההצטרפות נכשלה — בדקו את החיבור ונסו שוב',
+            )
           })
-        }
+        }}
+        onCancelJoin={() => {
+          window.location.hash = ''
+        }}
       />
     )
   }

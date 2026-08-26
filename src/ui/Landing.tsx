@@ -6,8 +6,13 @@ import Marks from './Marks'
 
 interface LandingProps {
   joinCode: string | null
+  /** Shown under the join button; a failed join keeps the code and lets the
+   *  player retry instead of silently landing on the create page. */
+  joinError?: string | null
   onCreate: (name: string, config: RoomConfig) => void
   onJoin: (name: string) => void
+  /** Leave the join flow deliberately (back to creating a room). */
+  onCancelJoin?: () => void
 }
 
 const DIFFICULTY_NOTE: Record<Difficulty, string> = {
@@ -18,7 +23,9 @@ const DIFFICULTY_NOTE: Record<Difficulty, string> = {
 
 const DIFFICULTIES = Object.keys(DIFFICULTY_LABELS) as Difficulty[]
 
-export default function Landing({ joinCode, onCreate, onJoin }: LandingProps) {
+export default function Landing({
+  joinCode, joinError = null, onCreate, onJoin, onCancelJoin,
+}: LandingProps) {
   const [name, setName] = useState('')
   const [difficulty, setDifficulty] = useState<Difficulty>('easy')
   const [rounds, setRounds] = useState(10)
@@ -60,6 +67,11 @@ export default function Landing({ joinCode, onCreate, onJoin }: LandingProps) {
               <div className="code">{joinCode}</div>
             </div>
             <div className="spacer" style={{ paddingBottom: 'var(--space-6)' }}>
+              {joinError && (
+                <p className="small" role="alert" style={{ color: '#a33', marginBottom: 'var(--space-3)' }}>
+                  {joinError}
+                </p>
+              )}
               <button
                 className="btn btn-primary btn-block bp on-accent"
                 disabled={!trimmed}
@@ -68,6 +80,15 @@ export default function Landing({ joinCode, onCreate, onJoin }: LandingProps) {
                 {trimmed && <Marks />}
                 הצטרפות
               </button>
+              {joinError && onCancelJoin && (
+                <button
+                  className="btn btn-block"
+                  style={{ marginTop: 'var(--space-3)' }}
+                  onClick={onCancelJoin}
+                >
+                  ליצירת חדר חדש
+                </button>
+              )}
             </div>
           </>
         ) : (

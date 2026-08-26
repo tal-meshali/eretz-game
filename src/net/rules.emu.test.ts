@@ -59,6 +59,19 @@ describe('room security rules', () => {
     )
   })
 
+  test('joining a room that does not exist is rejected (no ghost rooms)', async () => {
+    // A join racing a room deletion must not resurrect the room as a
+    // players-only zombie that traps every later joiner.
+    await assertFails(
+      set(ref(dbAs('bob'), 'rooms/GONE/players/bob'), { name: 'בוב', joinedAt: 2, online: true }),
+    )
+  })
+
+  test('presence updates still work on an existing room', async () => {
+    await set(ref(dbAs('alice'), 'rooms/AAAA'), freshRoom(Date.now()))
+    await assertSucceeds(set(ref(dbAs('alice'), 'rooms/AAAA/players/alice/online'), false))
+  })
+
   test('a guess is write-once and owner-only', async () => {
     await set(ref(dbAs('alice'), 'rooms/AAAA'), freshRoom(Date.now()))
     const guess = { lat: 32, lng: 34.8, at: 5 }

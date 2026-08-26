@@ -45,7 +45,22 @@ export function createRoomClient(db: Database, uid: string) {
   }
 
   async function joinRoom(code: string, name: string): Promise<void> {
-    if (!(await get(roomRef(code))).exists()) throw new Error('room-not-found')
+    // get() rejects transiently while the websocket is still connecting
+    // ("client is offline" — typical when a share link cold-loads the page)
+    // and right after anonymous sign-in. A missing room RESOLVES with
+    // exists() === false, so only a resolved read may declare it missing;
+    // rejections get retried, then surface as a retryable failure.
+    let exists = false
+    for (let attempt = 0; ; attempt++) {
+      try {
+        exists = (await get(roomRef(code))).exists()
+        break
+      } catch {
+        if (attempt >= 2) throw new Error('join-failed')
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+      }
+    }
+    if (!exists) throw new Error('room-not-found')
     await set(ref(db, `rooms/${code}/players/${uid}`), {
       name,
       joinedAt: serverTimestamp(),
