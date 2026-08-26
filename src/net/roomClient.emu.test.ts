@@ -99,6 +99,20 @@ describe('roomClient full game flow', () => {
     expect(room.hostUid).toBe(guest.uid)
   })
 
+  test('setupPresence tears down previous room registration when switching rooms', async () => {
+    const codeA = await host.client.createRoom(CONFIG, 'מארח')
+    const codeB = await host.client.createRoom(CONFIG, 'מארח')
+
+    host.client.setupPresence(codeA)
+    await waitForRoom(host.client, codeA, (r) => r.players[host.uid].online === true)
+
+    host.client.setupPresence(codeB)
+    await waitForRoom(host.client, codeB, (r) => r.players[host.uid].online === true)
+    const roomA = await waitForRoom(host.client, codeA, (r) => r.players[host.uid].online === false)
+
+    expect(roomA.players[host.uid].online).toBe(false)
+  })
+
   test('cleanupStaleRooms deletes only 24h+ rooms', async () => {
     const staleCode = 'ZOLD'
     const db = getDatabase(apps[0])

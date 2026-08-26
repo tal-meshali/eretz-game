@@ -12,6 +12,7 @@ import {
   set,
   update,
   type Database,
+  type DatabaseReference,
 } from 'firebase/database'
 import { pickLocalityId, poolFor } from '../game/localities'
 import { generateRoomCode } from '../game/roomCodes'
@@ -26,14 +27,19 @@ export function createRoomClient(db: Database, uid: string) {
     for (let attempt = 0; attempt < 5; attempt++) {
       const code = generateRoomCode()
       if ((await get(roomRef(code))).exists()) continue
-      await set(roomRef(code), {
-        createdAt: serverTimestamp(),
-        hostUid: uid,
-        state: 'lobby',
-        config,
-        players: { [uid]: { name: hostName, joinedAt: serverTimestamp(), online: true } },
-      })
-      return code
+      try {
+        await set(roomRef(code), {
+          createdAt: serverTimestamp(),
+          hostUid: uid,
+          state: 'lobby',
+          config,
+          players: { [uid]: { name: hostName, joinedAt: serverTimestamp(), online: true } },
+        })
+        return code
+      } catch {
+        // another client created this code between our get() and set() — retry with a new code
+        continue
+      }
     }
     throw new Error('could not allocate room code')
   }
@@ -51,13 +57,22 @@ export function createRoomClient(db: Database, uid: string) {
     return onValue(roomRef(code), (snap) => cb(snap.val()))
   }
 
+  let presence: { unsubscribe: () => void; onlineRef: DatabaseReference } | null = null
+
   function setupPresence(code: string): void {
+    if (presence) {
+      presence.unsubscribe()
+      onDisconnect(presence.onlineRef).cancel()
+      set(presence.onlineRef, false).catch(() => {})
+      presence = null
+    }
     const onlineRef = ref(db, `rooms/${code}/players/${uid}/online`)
-    onValue(ref(db, '.info/connected'), (snap) => {
+    const unsubscribe = onValue(ref(db, '.info/connected'), (snap) => {
       if (!snap.val()) return
       onDisconnect(onlineRef).set(false)
       set(onlineRef, true)
     })
+    presence = { unsubscribe, onlineRef }
   }
 
   function newRound(room: Room) {
