@@ -53,6 +53,16 @@ describe('phaseOf / currentRoundIndex', () => {
   test('finished', () => {
     expect(phaseOf(room({ state: 'finished' }))).toBe('finished')
   })
+  test('handles null holes in rounds array', () => {
+    const r = room({
+      state: 'playing',
+      rounds: [null, { localityId: 10, startedAt: T0, revealAt: T0 + 20000 }],
+    })
+    expect(currentRoundIndex(r)).toBe(1)
+    const current = r.rounds![currentRoundIndex(r)]
+    expect(current).not.toBeNull()
+    expect(current?.localityId).toBe(10)
+  })
 })
 
 describe('deadlineOf / shouldClose', () => {
@@ -75,6 +85,14 @@ describe('deadlineOf / shouldClose', () => {
     const r = playing({ 0: { h: g } })
     r.players.p.online = false
     expect(shouldClose(r, T0 + 5000)).toBe(true)
+  })
+  test('all offline players do not instant-close; deadline still closes', () => {
+    const g = { lat: 32, lng: 34.8, at: T0 + 1 }
+    const r = playing({ 0: { h: g, p: g } })
+    r.players.h.online = false
+    r.players.p.online = false
+    expect(shouldClose(r, T0 + 5000)).toBe(false)
+    expect(shouldClose(r, T0 + 20001)).toBe(true)
   })
 })
 
@@ -119,6 +137,9 @@ describe('eligibleHost', () => {
     p.p.online = false
     expect(eligibleHost(p)).toBeNull()
   })
+  test('null with empty players object', () => {
+    expect(eligibleHost({})).toBeNull()
+  })
 })
 
 describe('scoresFor', () => {
@@ -141,5 +162,27 @@ describe('scoresFor', () => {
     expect(s.p.total).toBe(0)
     expect(s.p.byRound[0]).toBeNull()
     expect(s.h.byRound).toHaveLength(1)
+  })
+  test('empty players object returns empty scores object', () => {
+    const r = room({
+      state: 'playing',
+      rounds: [{ localityId: 10, startedAt: T0, revealAt: T0 + 20000 }],
+      players: {},
+    })
+    const s = scoresFor(r, LOCS)
+    expect(s).toEqual({})
+  })
+  test('handles null round holes in scores', () => {
+    const r = room({
+      state: 'playing',
+      rounds: [null, { localityId: 10, startedAt: T0, revealAt: T0 + 20000 }],
+      guesses: {
+        1: { h: { lat: 32.0, lng: 34.8, at: T0 + 1 } },
+      },
+    })
+    const s = scoresFor(r, LOCS)
+    expect(s.h.total).toBe(1000)
+    expect(s.h.byRound).toHaveLength(1)
+    expect(s.h.byRound[0]!.points).toBe(1000)
   })
 })
