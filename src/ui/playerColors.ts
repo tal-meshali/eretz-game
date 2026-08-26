@@ -1,6 +1,18 @@
 import type { Room } from '../types'
 
-const PALETTE = ['#4e9df3', '#f3a04e', '#e26bd2', '#8ee34e', '#f3e14e', '#7a6bf0', '#4ee3c8', '#f06b6b']
+/* Industry is a mono palette, so player colors are steps of the steel ramp
+   plus two neutrals rather than a rainbow. Names are labelled on the map
+   next to each marker, so hue only has to separate, not identify. */
+const PALETTE = [
+  '#1d2d3d', // accent-900
+  '#5980a6', // accent
+  '#94bce3', // accent-400
+  '#416180', // accent-700
+  '#b7b7ba', // neutral-400
+  '#7e9cb8', // accent-2-500
+  '#2c455d', // accent-800
+  '#5d5d60', // neutral-700
+]
 
 export function playerColor(uid: string, room: Room): string {
   const ordered = Object.entries(room.players)

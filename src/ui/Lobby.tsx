@@ -1,5 +1,6 @@
 import type { Room } from '../types'
 import { DIFFICULTY_LABELS } from '../game/localities'
+import Marks from './Marks'
 
 interface LobbyProps {
   room: Room
@@ -11,37 +12,61 @@ interface LobbyProps {
 export default function Lobby({ room, shareUrl, isHost, onStart }: LobbyProps) {
   const players = Object.entries(room.players).sort(([, a], [, b]) => a.joinedAt - b.joinedAt)
   const whatsapp = `https://wa.me/?text=${encodeURIComponent(`בואו לשחק מלך הארץ! ${shareUrl}`)}`
+  const code = shareUrl.split('#')[1] ?? ''
 
   return (
     <div className="screen">
-      <h1>חדר המתנה</h1>
-      <div className="card">
-        <p className="muted">
+      <div className="pad" style={{ paddingTop: 'var(--space-8)' }}>
+        <div className="kicker">חדר המתנה</div>
+        {code && <div className="code">{code}</div>}
+        <div className="small muted" style={{ marginTop: 8 }}>
           {room.config.rounds} סבבים · {room.config.seconds} שניות · רמה:{' '}
           {DIFFICULTY_LABELS[room.config.difficulty]}
-        </p>
-        <div className="row">
-          <button onClick={() => navigator.clipboard?.writeText(shareUrl)}>העתק קישור</button>
-          <a href={whatsapp} target="_blank" rel="noreferrer">
-            <button>שתף בוואטסאפ</button>
+        </div>
+        <div className="row" style={{ marginTop: 'var(--space-6)' }}>
+          <button className="btn" onClick={() => navigator.clipboard?.writeText(shareUrl)}>
+            העתק קישור
+          </button>
+          <a className="btn" href={whatsapp} target="_blank" rel="noreferrer">
+            וואטסאפ
           </a>
         </div>
       </div>
-      <div className="card">
-        <h2>שחקנים ({players.length})</h2>
-        <ul>
-          {players.map(([uid, p]) => (
+
+      <div className="pad" style={{ paddingTop: 'var(--space-8)' }}>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <div className="kicker">שחקנים</div>
+          <span className="num small">{players.length}</span>
+        </div>
+        <hr className="rule" style={{ marginTop: 8 }} />
+        <ul className="roster">
+          {players.map(([uid, p], i) => (
             <li key={uid}>
-              <span>{p.name}</span> {p.online ? '🟢' : '⚪'} {uid === room.hostUid ? '·מארח' : ''}
+              <span className="idx">{String(i + 1).padStart(2, '0')}</span>
+              <span className={`dot${p.online ? ' on' : ''}`} />
+              <span className="name">{p.name}</span>
+              {uid === room.hostUid && <span className="badge">מנחה</span>}
+              {!p.online && <span className="trail small muted">מתחבר…</span>}
             </li>
           ))}
         </ul>
-        {isHost && (
-          <button disabled={players.length < 2} onClick={onStart}>
+      </div>
+
+      <div className="pad spacer" style={{ paddingBottom: 'var(--space-6)' }}>
+        {isHost ? (
+          <button
+            className="btn btn-primary btn-block bp on-accent"
+            disabled={players.length < 2}
+            onClick={onStart}
+          >
+            {players.length >= 2 && <Marks />}
             התחל משחק
           </button>
+        ) : (
+          <p className="small muted" style={{ margin: 0 }}>
+            ממתינים למנחה שיתחיל…
+          </p>
         )}
-        {!isHost && <p className="muted">ממתינים למארח שיתחיל…</p>}
       </div>
     </div>
   )

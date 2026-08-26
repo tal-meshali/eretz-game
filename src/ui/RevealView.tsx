@@ -3,6 +3,7 @@ import { REVEAL_MS, currentRound, currentRoundIndex, scoresFor } from '../game/d
 import { localityById } from '../game/localities'
 import { haversineKm, pointsFor } from '../game/score'
 import { playerColor } from './playerColors'
+import Marks from './Marks'
 import type { Room } from '../types'
 
 interface RevealViewProps {
@@ -10,6 +11,8 @@ interface RevealViewProps {
   nowMs: number
   myUid: string
 }
+
+const RINGS = [25, 50, 100]
 
 export default function RevealView({ room, nowMs, myUid }: RevealViewProps) {
   const round = currentRound(room)!
@@ -35,45 +38,88 @@ export default function RevealView({ room, nowMs, myUid }: RevealViewProps) {
     .sort((a, b) => b.points - a.points)
 
   const pins: Pin[] = [
-    { lat: target.lat, lng: target.lng, label: target.name, color: '#2eb886', kind: 'answer' },
+    { lat: target.lat, lng: target.lng, label: target.name, kind: 'answer' },
     ...rows
       .filter((r) => r.guess)
       .map((r) => ({
         lat: r.guess!.lat,
         lng: r.guess!.lng,
-        label: r.name,
+        // My own guess goes unlabelled — the dimension line names it, and two
+        // labels this close to the answer would collide.
+        label: r.uid === myUid ? '' : r.name,
         color: playerColor(r.uid, room),
         kind: 'guess' as const,
       })),
   ]
 
+  const mine = rows.find((r) => r.uid === myUid)?.guess ?? null
+
   return (
     <div className="screen">
-      <div className="hud">
-        <h2 className="locality-name">{target.name}</h2>
-        <span className="muted">{isLast ? `סיום בעוד ${nextIn}` : `הסבב הבא בעוד ${nextIn}`}</span>
+      <div className="pad" style={{ paddingTop: 'var(--space-6)', paddingBottom: 'var(--space-3)' }}>
+        <div className="kicker">
+          סבב {index + 1} · תוצאה
+        </div>
+        <div className="hud" style={{ marginTop: 4 }}>
+          <h2 className="locality-name">{target.name}</h2>
+          <div style={{ textAlign: 'end' }}>
+            <div className="num ltr" style={{ fontSize: 14, color: 'var(--color-accent)' }}>
+              {target.lat.toFixed(3)}°N {target.lng.toFixed(3)}°E
+            </div>
+            <div className="small muted">{target.pop.toLocaleString('he-IL')} תושבים</div>
+          </div>
+        </div>
       </div>
-      <MapView pins={pins} />
-      <table className="scores">
-        <thead>
-          <tr>
-            <th>שחקן</th>
-            <th>מרחק</th>
-            <th>נקודות</th>
-            <th>סה״כ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.uid} style={r.uid === myUid ? { fontWeight: 700 } : undefined}>
-              <td>{r.name}</td>
-              <td>{r.distanceKm == null ? '—' : `${r.distanceKm.toFixed(1)} ק״מ`}</td>
-              <td>{r.points}</td>
-              <td>{r.total}</td>
+
+      <div className="plate bp" style={{ margin: '0 var(--space-6)' }}>
+        <Marks />
+        <MapView
+          pins={pins}
+          rings={RINGS}
+          ringsAt={{ lat: target.lat, lng: target.lng }}
+          link={mine ? { from: mine, to: { lat: target.lat, lng: target.lng } } : null}
+          fitTo={pins.map((p) => ({ lat: p.lat, lng: p.lng }))}
+        />
+      </div>
+
+      <div className="pad" style={{ paddingTop: 'var(--space-6)' }}>
+        <table className="scores">
+          <thead>
+            <tr>
+              <th>שחקן</th>
+              <th>מרחק</th>
+              <th>נקודות</th>
+              <th>סה״כ</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.uid} className={r.uid === myUid ? 'me' : undefined}>
+                <td>{r.name}</td>
+                <td className="num muted">
+                  {r.distanceKm == null ? '—' : `${r.distanceKm.toFixed(1)} ק״מ`}
+                </td>
+                <td className="num pts">{r.points}</td>
+                <td className="num">{r.total.toLocaleString('he-IL')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div
+        className="pad spacer row"
+        style={{
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          paddingBlock: 'var(--space-4) var(--space-6)',
+        }}
+      >
+        <span className="small muted">{isLast ? 'סיום בעוד' : 'הסבב הבא בעוד'}</span>
+        <span className="num" style={{ fontSize: 26, fontWeight: 600 }}>
+          {nextIn}
+        </span>
+      </div>
     </div>
   )
 }
