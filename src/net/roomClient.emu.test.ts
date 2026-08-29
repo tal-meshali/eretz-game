@@ -79,11 +79,13 @@ describe('roomClient full game flow', () => {
 
     await host.client.finishGame(code)
     room = await waitForRoom(guest.client, code, (r) => r.state === 'finished')
+    expect(typeof room.finishedAt).toBe('number')
 
     await host.client.playAgain(code)
     room = await waitForRoom(guest.client, code, (r) => r.state === 'lobby')
     expect(room.rounds).toBeUndefined()
     expect(room.guesses).toBeUndefined()
+    expect(room.finishedAt).toBeUndefined()
     expect(Object.keys(room.players)).toHaveLength(2)
   })
 
@@ -139,5 +141,17 @@ describe('roomClient full game flow', () => {
     await host.client.cleanupStaleRooms()
     expect((await get(ref(db, `rooms/${staleCode}`))).exists()).toBe(false)
     expect((await get(ref(db, `rooms/${freshCode}`))).exists()).toBe(true)
+  })
+
+  test('cleanupStaleRooms clears finished games only after the grace period', async () => {
+    const db = getDatabase(apps[0])
+    const oldFinished = await host.client.createRoom(CONFIG, 'מארח')
+    await set(ref(db, `rooms/${oldFinished}/state`), 'finished')
+    await set(ref(db, `rooms/${oldFinished}/finishedAt`), Date.now() - 2 * 3600_000)
+    const justFinished = await host.client.createRoom(CONFIG, 'מארח')
+    await host.client.finishGame(justFinished)
+    await host.client.cleanupStaleRooms()
+    expect((await get(ref(db, `rooms/${oldFinished}`))).exists()).toBe(false)
+    expect((await get(ref(db, `rooms/${justFinished}`))).exists()).toBe(true)
   })
 })

@@ -33,7 +33,9 @@ export default function App() {
     ensureSignedIn().then((u) => {
       if (cancelled) return
       setUid(u)
-      setClient(createRoomClient(db, u))
+      const c = createRoomClient(db, u)
+      setClient(c)
+      void c.cleanupStaleRooms()
     })
     const onHash = () => setCode(codeFromHash(window.location.hash))
     window.addEventListener('hashchange', onHash)

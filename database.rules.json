@@ -4,10 +4,11 @@
     ".write": false,
     "rooms": {
       ".read": "auth != null",
-      ".indexOn": ["createdAt"],
+      ".indexOn": ["createdAt", "finishedAt"],
       "$code": {
-        ".write": "auth != null && ((!data.exists() && newData.child('createdAt').exists() && newData.child('hostUid').exists() && newData.child('state').exists() && newData.child('config').exists()) || (!newData.exists() && (!data.child('createdAt').exists() || data.child('createdAt').val() < now - 86400000)))",
+        ".write": "auth != null && ((!data.exists() && newData.child('createdAt').exists() && newData.child('hostUid').exists() && newData.child('state').exists() && newData.child('config').exists()) || (!newData.exists() && (!data.child('createdAt').exists() || data.child('createdAt').val() < now - 86400000 || (data.child('state').val() === 'finished' && data.child('finishedAt').isNumber() && data.child('finishedAt').val() < now - 3600000))))",
         "state": { ".write": "auth != null && data.parent().child('createdAt').exists()" },
+        "finishedAt": { ".write": "auth != null && data.parent().child('createdAt').exists()" },
         "config": { ".write": "auth != null && data.parent().child('createdAt').exists()" },
         "hostUid": { ".write": "auth != null && data.parent().child('createdAt').exists()" },
         "rounds": { ".write": "auth != null && data.parent().child('createdAt').exists()" },

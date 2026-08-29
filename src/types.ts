@@ -28,6 +28,7 @@ export interface Room {
   createdAt: number
   hostUid: string
   state: 'lobby' | 'playing' | 'finished'
+  finishedAt?: number
   config: RoomConfig
   players: Record<string, Player>
   rounds?: (RoundData | null)[] // RTDB returns numeric-keyed objects as arrays

@@ -95,6 +95,28 @@ describe('room security rules', () => {
     await assertFails(set(ref(dbAs('bob'), 'rooms/NEWR'), null))
   })
 
+  test('finished rooms are deletable after the grace period, not before', async () => {
+    const base = freshRoom(Date.now())
+    await set(ref(dbAs('alice'), 'rooms/FOLD'), {
+      ...base,
+      state: 'finished',
+      finishedAt: Date.now() - 2 * 3600_000,
+    })
+    await set(ref(dbAs('alice'), 'rooms/FNEW'), { ...base, state: 'finished', finishedAt: Date.now() })
+    await assertSucceeds(set(ref(dbAs('bob'), 'rooms/FOLD'), null))
+    await assertFails(set(ref(dbAs('bob'), 'rooms/FNEW'), null))
+  })
+
+  test('participants can stamp and clear finishedAt on an existing room', async () => {
+    await set(ref(dbAs('alice'), 'rooms/AAAA'), freshRoom(Date.now()))
+    await assertSucceeds(
+      update(ref(dbAs('alice'), 'rooms/AAAA'), { state: 'finished', finishedAt: Date.now() }),
+    )
+    await assertSucceeds(
+      update(ref(dbAs('alice'), 'rooms/AAAA'), { state: 'lobby', finishedAt: null }),
+    )
+  })
+
   test('a createdAt-less ghost room is deletable at any age', async () => {
     // Ghosts predating the join hardening have no createdAt, so the 24h
     // comparison is never true — without this carve-out they are immortal

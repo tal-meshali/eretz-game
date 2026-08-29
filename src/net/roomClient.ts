@@ -10,6 +10,7 @@ import {
   remove,
   serverTimestamp,
   set,
+  startAt,
   update,
   type Database,
   type DatabaseReference,
@@ -19,11 +20,36 @@ import { generateRoomCode } from '../game/roomCodes'
 import type { Room, RoomConfig } from '../types'
 
 const DAY_MS = 24 * 3600_000
+// keep in sync with the finished-room grace period in database.rules.json
+const FINISHED_TTL_MS = 3600_000
 
 export function createRoomClient(db: Database, uid: string) {
   const roomRef = (code: string) => ref(db, `rooms/${code}`)
 
+  // Resolves once the realtime websocket is up (or after timeoutMs — callers
+  // still handle failure). get() rejects with "client is offline" until then,
+  // which on slow networks outlives any reasonable retry loop.
+  function waitForConnection(timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      let done = false
+      let unsubscribe = () => {}
+      const finish = () => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        unsubscribe()
+        resolve()
+      }
+      const timer = setTimeout(finish, timeoutMs)
+      unsubscribe = onValue(ref(db, '.info/connected'), (snap) => {
+        if (snap.val() === true) finish()
+      })
+      if (done) unsubscribe()
+    })
+  }
+
   async function createRoom(config: RoomConfig, hostName: string): Promise<string> {
+    await waitForConnection(8000)
     for (let attempt = 0; attempt < 5; attempt++) {
       const code = generateRoomCode()
       if ((await get(roomRef(code))).exists()) continue
@@ -45,11 +71,11 @@ export function createRoomClient(db: Database, uid: string) {
   }
 
   async function joinRoom(code: string, name: string): Promise<void> {
-    // get() rejects transiently while the websocket is still connecting
-    // ("client is offline" — typical when a share link cold-loads the page)
-    // and right after anonymous sign-in. A missing room RESOLVES with
-    // exists() === false, so only a resolved read may declare it missing;
-    // rejections get retried, then surface as a retryable failure.
+    // A share-link cold load reaches here while the websocket is still
+    // connecting, so wait for it before probing the room. A missing room
+    // RESOLVES with exists() === false, so only a resolved read may declare
+    // it missing; rejections get retried, then surface as a retryable failure.
+    await waitForConnection(8000)
     let exists = false
     for (let attempt = 0; ; attempt++) {
       try {
@@ -122,11 +148,11 @@ export function createRoomClient(db: Database, uid: string) {
   }
 
   async function finishGame(code: string): Promise<void> {
-    await set(ref(db, `rooms/${code}/state`), 'finished')
+    await update(roomRef(code), { state: 'finished', finishedAt: serverTimestamp() })
   }
 
   async function playAgain(code: string): Promise<void> {
-    await update(roomRef(code), { state: 'lobby', rounds: null, guesses: null })
+    await update(roomRef(code), { state: 'lobby', rounds: null, guesses: null, finishedAt: null })
   }
 
   async function claimHost(code: string): Promise<void> {
@@ -134,14 +160,25 @@ export function createRoomClient(db: Database, uid: string) {
   }
 
   async function cleanupStaleRooms(): Promise<void> {
-    const stale = await get(
+    const sweeps = [
       query(ref(db, 'rooms'), orderByChild('createdAt'), endAt(Date.now() - DAY_MS), limitToFirst(20)),
-    )
+      // startAt(1) skips rooms with no finishedAt (null orders before numbers)
+      query(
+        ref(db, 'rooms'),
+        orderByChild('finishedAt'),
+        startAt(1),
+        endAt(Date.now() - FINISHED_TTL_MS),
+        limitToFirst(20),
+      ),
+    ]
     const jobs: Promise<void>[] = []
-    stale.forEach((child) => {
-      jobs.push(remove(child.ref))
-    })
-    await Promise.all(jobs).catch(() => {}) // best-effort housekeeping
+    for (const sweep of sweeps) {
+      const stale = await get(sweep).catch(() => null)
+      stale?.forEach((child) => {
+        jobs.push(remove(child.ref).catch(() => {}))
+      })
+    }
+    await Promise.all(jobs) // best-effort housekeeping
   }
 
   return {
