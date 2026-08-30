@@ -6,6 +6,8 @@ import Marks from './Marks'
 
 interface LandingProps {
   joinCode: string | null
+  /** Prefills the nickname field (the signed-in Google display name). */
+  defaultName?: string
   /** Shown under the join button; a failed join keeps the code and lets the
    *  player retry instead of silently landing on the create page. */
   joinError?: string | null
@@ -24,9 +26,9 @@ const DIFFICULTY_NOTE: Record<Difficulty, string> = {
 const DIFFICULTIES = Object.keys(DIFFICULTY_LABELS) as Difficulty[]
 
 export default function Landing({
-  joinCode, joinError = null, onCreate, onJoin, onCancelJoin,
+  joinCode, defaultName = '', joinError = null, onCreate, onJoin, onCancelJoin,
 }: LandingProps) {
-  const [name, setName] = useState('')
+  const [name, setName] = useState(() => defaultName.trim().slice(0, 20))
   const [difficulty, setDifficulty] = useState<Difficulty>('easy')
   const [rounds, setRounds] = useState(10)
   const [seconds, setSeconds] = useState(20)

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { db, ensureSignedIn, isConfigured } from './firebase'
+import { completeRedirectSignIn, db, isConfigured, signInWithGoogle, watchUser, type SignedInUser } from './firebase'
 import { createRoomClient, type RoomClient } from './net/roomClient'
 import { serverNow, watchServerOffset } from './net/serverTime'
 import { codeFromHash } from './game/roomCodes'
@@ -18,35 +18,45 @@ function isValidRoom(room: Room | null): room is Room {
 }
 
 export default function App() {
-  const [uid, setUid] = useState<string | null>(null)
+  const [user, setUser] = useState<SignedInUser | null>(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [signInError, setSignInError] = useState<string | null>(null)
   const [client, setClient] = useState<RoomClient | null>(null)
   const [code, setCode] = useState<string | null>(codeFromHash(window.location.hash))
   const [room, setRoom] = useState<Room | null>(null)
   const [joinError, setJoinError] = useState<string | null>(null)
   const [now, setNow] = useState(() => serverNow())
   const busyRef = useRef(false) // one host action in flight at a time
+  const uid = user?.uid ?? null
 
   useEffect(() => {
     if (!isConfigured()) return
-    let cancelled = false
     const stopOffset = watchServerOffset(db)
-    ensureSignedIn().then((u) => {
-      if (cancelled) return
-      setUid(u)
-      const c = createRoomClient(db, u)
-      setClient(c)
-      void c.cleanupStaleRooms()
+    const stopAuth = watchUser((u) => {
+      setUser(u)
+      setAuthReady(true)
     })
+    completeRedirectSignIn().catch(() => setSignInError('ההתחברות נכשלה — נסו שוב'))
     const onHash = () => setCode(codeFromHash(window.location.hash))
     window.addEventListener('hashchange', onHash)
     const tick = setInterval(() => setNow(serverNow()), 250)
     return () => {
-      cancelled = true
       stopOffset()
+      stopAuth()
       window.removeEventListener('hashchange', onHash)
       clearInterval(tick)
     }
   }, [])
+
+  useEffect(() => {
+    if (!uid) {
+      setClient(null)
+      return
+    }
+    const c = createRoomClient(db, uid)
+    setClient(c)
+    void c.cleanupStaleRooms()
+  }, [uid])
 
   useEffect(() => {
     setJoinError(null)
@@ -101,7 +111,40 @@ export default function App() {
       </div>
     )
   }
-  if (!uid || !client) return <div className="screen">מתחברים…</div>
+  if (!authReady) return <div className="screen">מתחברים…</div>
+  if (!user)
+    return (
+      <div className="screen">
+        <div className="pad stack" style={{ paddingTop: 'var(--space-6)', flex: 1 }}>
+          <div>
+            <div className="kicker">מדד קרבה · משחק רשת</div>
+            <h1 className="wordmark">מלך הארץ</h1>
+          </div>
+          <p className="muted">כדי לשחק צריך להתחבר עם חשבון Google</p>
+          <div className="spacer" style={{ paddingBottom: 'var(--space-6)' }}>
+            {signInError && (
+              <p className="small" role="alert" style={{ color: '#a33', marginBottom: 'var(--space-3)' }}>
+                {signInError}
+              </p>
+            )}
+            <button
+              className="btn btn-primary btn-block bp on-accent"
+              onClick={() => {
+                setSignInError(null)
+                signInWithGoogle().catch((e: unknown) => {
+                  // closing the popup isn't an error worth shouting about
+                  if ((e as { code?: string }).code === 'auth/popup-closed-by-user') return
+                  setSignInError('ההתחברות נכשלה — נסו שוב')
+                })
+              }}
+            >
+              התחברות עם Google
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  if (!client) return <div className="screen">מתחברים…</div>
 
   const createAndEnter = async (name: string, config: RoomConfig) => {
     void client.cleanupStaleRooms()
@@ -109,7 +152,11 @@ export default function App() {
     window.location.hash = `#${newCode}`
   }
 
-  if (!code) return <Landing joinCode={null} onCreate={createAndEnter} onJoin={() => {}} />
+  const defaultName = user.displayName ?? ''
+  if (!code)
+    return (
+      <Landing joinCode={null} defaultName={defaultName} onCreate={createAndEnter} onJoin={() => {}} />
+    )
   if (validRoom === null || !joined) {
     // A failed join stays here with the code intact: silently bouncing the
     // player to the create page reads as a broken link, and most failures
@@ -117,6 +164,7 @@ export default function App() {
     return (
       <Landing
         joinCode={code}
+        defaultName={defaultName}
         joinError={joinError}
         onCreate={createAndEnter}
         onJoin={(name) => {

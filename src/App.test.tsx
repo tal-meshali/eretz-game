@@ -27,10 +27,22 @@ const mockClient = {
   cleanupStaleRooms: vi.fn(async () => {}),
 }
 
+const { authState, signInMock } = vi.hoisted(() => ({
+  authState: {
+    user: { uid: 'me', displayName: null } as { uid: string; displayName: string | null } | null,
+  },
+  signInMock: vi.fn(async () => {}),
+}))
+
 vi.mock('./firebase', () => ({
   db: {},
   isConfigured: () => true,
-  ensureSignedIn: async () => 'me',
+  watchUser: (cb: (u: typeof authState.user) => void) => {
+    cb(authState.user)
+    return () => {}
+  },
+  signInWithGoogle: signInMock,
+  completeRedirectSignIn: async () => {},
 }))
 vi.mock('./net/roomClient', () => ({ createRoomClient: () => mockClient }))
 vi.mock('./net/serverTime', () => ({
@@ -57,6 +69,7 @@ function baseRoom(over: Partial<Room> = {}): Room {
 beforeEach(() => {
   vi.clearAllMocks()
   roomCb = null
+  authState.user = { uid: 'me', displayName: null }
   window.location.hash = ''
 })
 
@@ -64,6 +77,21 @@ describe('App', () => {
   test('no hash → landing in create mode', async () => {
     render(<App />)
     expect(await screen.findByRole('button', { name: 'צור חדר' })).toBeInTheDocument()
+  })
+
+  test('signed out → Google sign-in screen, button triggers sign-in', async () => {
+    authState.user = null
+    render(<App />)
+    const button = await screen.findByRole('button', { name: 'התחברות עם Google' })
+    expect(screen.queryByLabelText('כינוי')).not.toBeInTheDocument()
+    await userEvent.click(button)
+    expect(signInMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('Google display name prefills the nickname field', async () => {
+    authState.user = { uid: 'me', displayName: 'טל כהן' }
+    render(<App />)
+    expect(await screen.findByLabelText('כינוי')).toHaveValue('טל כהן')
   })
 
   test('hash + not a member yet → landing in join mode', async () => {

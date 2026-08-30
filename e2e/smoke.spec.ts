@@ -1,4 +1,17 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+
+// Drives the Auth emulator's fake Google account chooser that opens in a popup.
+async function signInWithGoogle(page: Page, ctx: BrowserContext): Promise<void> {
+  const popupPromise = ctx.waitForEvent('page')
+  await page.getByRole('button', { name: 'התחברות עם Google' }).click()
+  const popup = await popupPromise
+  // let the account list finish loading — clicking during its reflow can land
+  // on an existing account instead of "Add new account"
+  await popup.waitForLoadState('networkidle')
+  await popup.getByText('Add new account').click()
+  await popup.getByRole('button', { name: 'Auto-generate user information' }).click()
+  await popup.getByRole('button', { name: /Sign in with Google/ }).click()
+}
 
 test('two players play a round end to end', async ({ browser }) => {
   const hostCtx = await browser.newContext()
@@ -6,8 +19,9 @@ test('two players play a round end to end', async ({ browser }) => {
   const host = await hostCtx.newPage()
   const guest = await guestCtx.newPage()
 
-  // Host creates a fast room
+  // Host signs in and creates a fast room
   await host.goto('/')
+  await signInWithGoogle(host, hostCtx)
   await host.getByLabel('כינוי').fill('מארח')
   // exact: the stepper's −/+ buttons are labelled "הפחת סבבים"/"הוסף סבבים"
   await host.getByLabel('סבבים', { exact: true }).fill('3')
@@ -17,8 +31,9 @@ test('two players play a round end to end', async ({ browser }) => {
   const url = host.url()
   expect(url).toMatch(/#[A-Z]{4}$/)
 
-  // Guest joins via the invite URL
+  // Guest signs in and joins via the invite URL
   await guest.goto(url)
+  await signInWithGoogle(guest, guestCtx)
   await guest.getByLabel('כינוי').fill('אורחת')
   await guest.getByRole('button', { name: 'הצטרפות' }).click()
   await expect(guest.getByText('חדר המתנה')).toBeVisible()

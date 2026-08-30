@@ -1,5 +1,13 @@
 import { initializeApp } from 'firebase/app'
-import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth'
+import {
+  connectAuthEmulator,
+  getAuth,
+  getRedirectResult,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithRedirect,
+} from 'firebase/auth'
 import { connectDatabaseEmulator, getDatabase } from 'firebase/database'
 import { firebaseConfig } from './firebase-config'
 
@@ -22,8 +30,34 @@ export function isConfigured(): boolean {
   return useEmulator || firebaseConfig.apiKey !== 'PASTE_ME'
 }
 
-export async function ensureSignedIn(): Promise<string> {
-  if (auth.currentUser) return auth.currentUser.uid
-  const cred = await signInAnonymously(auth)
-  return cred.user.uid
+export interface SignedInUser {
+  uid: string
+  displayName: string | null
+}
+
+export function watchUser(cb: (user: SignedInUser | null) => void): () => void {
+  return onAuthStateChanged(auth, (u) =>
+    cb(u ? { uid: u.uid, displayName: u.displayName } : null),
+  )
+}
+
+export async function signInWithGoogle(): Promise<void> {
+  const provider = new GoogleAuthProvider()
+  try {
+    await signInWithPopup(auth, provider)
+  } catch (e) {
+    // In-app browsers (WhatsApp/Instagram) and popup blockers can't open the
+    // popup — a full-page redirect is the only flow that works there.
+    const code = (e as { code?: string }).code
+    if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
+      await signInWithRedirect(auth, provider)
+      return
+    }
+    throw e
+  }
+}
+
+/** Surfaces errors from a signInWithRedirect round-trip; success lands via watchUser. */
+export function completeRedirectSignIn(): Promise<void> {
+  return getRedirectResult(auth).then(() => undefined)
 }
