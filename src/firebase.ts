@@ -7,6 +7,7 @@ import {
   onAuthStateChanged,
   signInWithPopup,
   signInWithRedirect,
+  signOut,
 } from 'firebase/auth'
 import { connectDatabaseEmulator, getDatabase } from 'firebase/database'
 import { firebaseConfig } from './firebase-config'
@@ -36,9 +37,16 @@ export interface SignedInUser {
 }
 
 export function watchUser(cb: (user: SignedInUser | null) => void): () => void {
-  return onAuthStateChanged(auth, (u) =>
-    cb(u ? { uid: u.uid, displayName: u.displayName } : null),
-  )
+  return onAuthStateChanged(auth, (u) => {
+    // Sessions persisted before the Google-only switch restore as anonymous
+    // users — evict them so those players see the sign-in screen too.
+    if (u?.isAnonymous) {
+      void signOut(auth)
+      cb(null)
+      return
+    }
+    cb(u ? { uid: u.uid, displayName: u.displayName } : null)
+  })
 }
 
 export async function signInWithGoogle(): Promise<void> {
