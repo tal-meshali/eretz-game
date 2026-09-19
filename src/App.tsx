@@ -168,16 +168,28 @@ export default function App() {
                 <button
                   className="btn btn-block"
                   style={{ marginTop: 'var(--space-3)' }}
-                  onClick={async () => {
+                  onClick={() => {
                     // Dynamic import: this is the only reference to localRoomClient
                     // anywhere in the module graph, and keeping it inside this
                     // DEV-gated branch is what actually keeps the module out of the
                     // production bundle. A static import at module scope ships the
                     // module regardless of the DEV check, since `solo` is a runtime
                     // value no bundler can fold at compile time.
-                    const { createLocalRoomClient } = await import('./net/localRoomClient')
-                    setLocalClient(createLocalRoomClient(SOLO_UID))
-                    setSolo(true)
+                    //
+                    // .catch(console.error): this is the only path in the app where a
+                    // failure would otherwise produce nothing at all — no console
+                    // error, no UI change, just a button that does not respond — and
+                    // it is the path someone is on while debugging.
+                    void (async () => {
+                      const { createLocalRoomClient } = await import('./net/localRoomClient')
+                      // serverNow, not Date.now: App compares these timestamps
+                      // against serverNow() (which carries the RTDB clock offset)
+                      // everywhere it drives the host engine, so a local client
+                      // stamping bare Date.now() would skew every round deadline
+                      // and the reveal hold.
+                      setLocalClient(createLocalRoomClient(SOLO_UID, serverNow))
+                      setSolo(true)
+                    })().catch(console.error)
                   }}
                 >
                   משחק מקומי

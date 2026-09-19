@@ -97,6 +97,18 @@ describe('createLocalRoomClient', () => {
     expect(Object.keys(read().players)).toEqual([UID]) // the player survives
   })
 
+  test('stamps timestamps from the injected clock, not Date.now', async () => {
+    const client = createLocalRoomClient(UID, () => 5000)
+    const code = await client.createRoom(CONFIG, 'אני')
+    let room: Room | null = null
+    client.watchRoom(code, (r) => (room = r))
+    await client.startGame(code, room!)
+    expect(room!.rounds![0]!.startedAt).toBe(5000)
+
+    await client.closeRound(code, 0)
+    expect(room!.rounds![0]!.revealAt).toBe(5000)
+  })
+
   test('presence and housekeeping are inert, not missing', async () => {
     const { client, code, read } = await started()
     expect(() => client.setupPresence(code)).not.toThrow()
