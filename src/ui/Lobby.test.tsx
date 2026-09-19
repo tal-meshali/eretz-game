@@ -31,4 +31,15 @@ describe('Lobby', () => {
     rerender(<Lobby room={solo} shareUrl="u" isHost={true} onStart={vi.fn()} />)
     expect(screen.getByRole('button', { name: 'התחל משחק' })).toBeDisabled()
   })
+  test('minPlayers of 1 lets a one-player room start', () => {
+    const onStart = vi.fn()
+    const solo: Room = { ...room, players: { h: room.players.h } }
+    render(
+      <Lobby room={solo} shareUrl="u" isHost={true} minPlayers={1} onStart={onStart} />,
+    )
+    const start = screen.getByRole('button', { name: 'התחל משחק' })
+    expect(start).toBeEnabled()
+    start.click()
+    expect(onStart).toHaveBeenCalled()
+  })
 })
