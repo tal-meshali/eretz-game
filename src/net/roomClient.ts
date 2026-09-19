@@ -15,7 +15,9 @@ import {
   type Database,
   type DatabaseReference,
 } from 'firebase/database'
-import { pickLocalityId, poolFor } from '../game/localities'
+// serverTimestamp() is a sentinel object the server replaces on write, not a
+// number — the Room type describes what comes back out, not what goes in.
+import { newRoundData } from '../game/rounds'
 import { generateRoomCode } from '../game/roomCodes'
 import type { Room, RoomConfig } from '../types'
 
@@ -119,16 +121,11 @@ export function createRoomClient(db: Database, uid: string) {
     presence = { unsubscribe, onlineRef }
   }
 
-  function newRound(room: Room) {
-    const used = (room.rounds ?? []).filter(Boolean).map((r) => r!.localityId)
-    return {
-      localityId: pickLocalityId(poolFor(room.config.difficulty), used),
-      startedAt: serverTimestamp(),
-    }
-  }
-
   async function startGame(code: string, room: Room): Promise<void> {
-    await update(roomRef(code), { state: 'playing', rounds: [newRound(room)] })
+    await update(roomRef(code), {
+      state: 'playing',
+      rounds: [newRoundData(room, serverTimestamp() as unknown as number)],
+    })
   }
 
   async function submitGuess(code: string, roundIndex: number, guess: { lat: number; lng: number }) {
@@ -144,7 +141,7 @@ export function createRoomClient(db: Database, uid: string) {
 
   async function startNextRound(code: string, room: Room): Promise<void> {
     const next = room.rounds?.length ?? 0
-    await set(ref(db, `rooms/${code}/rounds/${next}`), newRound(room))
+    await set(ref(db, `rooms/${code}/rounds/${next}`), newRoundData(room, serverTimestamp() as unknown as number))
   }
 
   async function finishGame(code: string): Promise<void> {
