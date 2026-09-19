@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { completeRedirectSignIn, db, isConfigured, signInWithGoogle, watchUser, type SignedInUser } from './firebase'
 import { createRoomClient, type RoomClient } from './net/roomClient'
-import { createLocalRoomClient } from './net/localRoomClient'
 import { serverNow, watchServerOffset } from './net/serverTime'
 import { codeFromHash } from './game/roomCodes'
 import { currentRoundIndex, eligibleHost, hostAction, phaseOf } from './game/derive'
@@ -33,7 +32,7 @@ export default function App() {
   const busyRef = useRef(false) // one host action in flight at a time
   const [solo, setSolo] = useState(false)
   const [soloCode, setSoloCode] = useState<string | null>(null)
-  const localClient = useMemo(() => (solo ? createLocalRoomClient(SOLO_UID) : null), [solo])
+  const [localClient, setLocalClient] = useState<RoomClient | null>(null)
 
   // The Firebase uid, which is what the RTDB client is keyed on — null in solo
   // mode, so that effect never runs.
@@ -169,7 +168,17 @@ export default function App() {
                 <button
                   className="btn btn-block"
                   style={{ marginTop: 'var(--space-3)' }}
-                  onClick={() => setSolo(true)}
+                  onClick={async () => {
+                    // Dynamic import: this is the only reference to localRoomClient
+                    // anywhere in the module graph, and keeping it inside this
+                    // DEV-gated branch is what actually keeps the module out of the
+                    // production bundle. A static import at module scope ships the
+                    // module regardless of the DEV check, since `solo` is a runtime
+                    // value no bundler can fold at compile time.
+                    const { createLocalRoomClient } = await import('./net/localRoomClient')
+                    setLocalClient(createLocalRoomClient(SOLO_UID))
+                    setSolo(true)
+                  }}
                 >
                   משחק מקומי
                 </button>
