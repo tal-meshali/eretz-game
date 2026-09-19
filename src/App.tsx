@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { completeRedirectSignIn, db, isConfigured, signInWithGoogle, watchUser, type SignedInUser } from './firebase'
 import { createRoomClient, type RoomClient } from './net/roomClient'
+import { createLocalRoomClient } from './net/localRoomClient'
 import { serverNow, watchServerOffset } from './net/serverTime'
 import { codeFromHash } from './game/roomCodes'
 import { currentRoundIndex, eligibleHost, hostAction, phaseOf } from './game/derive'
@@ -17,6 +18,9 @@ function isValidRoom(room: Room | null): room is Room {
   return !!room && !!room.config && !!room.state
 }
 
+const SOLO_UID = 'solo'
+const SOLO_NAME = 'שחקן מקומי'
+
 export default function App() {
   const [user, setUser] = useState<SignedInUser | null>(null)
   const [authReady, setAuthReady] = useState(false)
@@ -27,7 +31,24 @@ export default function App() {
   const [joinError, setJoinError] = useState<string | null>(null)
   const [now, setNow] = useState(() => serverNow())
   const busyRef = useRef(false) // one host action in flight at a time
-  const uid = user?.uid ?? null
+  const [solo, setSolo] = useState(false)
+  const [soloCode, setSoloCode] = useState<string | null>(null)
+  const localClient = useMemo(() => (solo ? createLocalRoomClient(SOLO_UID) : null), [solo])
+
+  // The Firebase uid, which is what the RTDB client is keyed on — null in solo
+  // mode, so that effect never runs.
+  const fbUid = user?.uid ?? null
+
+  /* One shape for "who is playing and through which client", so the two modes
+     are symmetric rather than one being a set of ternaries bolted onto the
+     other. Everything below reads from here. */
+  const session =
+    solo && localClient
+      ? { uid: SOLO_UID, displayName: SOLO_NAME, client: localClient }
+      : user && client
+        ? { uid: user.uid, displayName: user.displayName, client }
+        : null
+  const activeCode = solo ? soloCode : code
 
   useEffect(() => {
     if (!isConfigured()) return
@@ -49,37 +70,40 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!uid) {
+    if (!fbUid) {
       setClient(null)
       return
     }
-    const c = createRoomClient(db, uid)
+    const c = createRoomClient(db, fbUid)
     setClient(c)
     void c.cleanupStaleRooms()
-  }, [uid])
+  }, [fbUid])
 
   useEffect(() => {
     setJoinError(null)
-    if (!client || !code) {
+    const active = session?.client
+    if (!active || !activeCode) {
       setRoom(null)
       return
     }
-    return client.watchRoom(code, setRoom)
-  }, [client, code])
+    return active.watchRoom(activeCode, setRoom)
+  }, [session?.client, activeCode])
 
   const validRoom = isValidRoom(room) ? room : null
-  const joined = !!(uid && validRoom?.players?.[uid])
+  const joined = !!(session && validRoom?.players?.[session.uid])
 
   useEffect(() => {
-    if (client && code && joined) {
-      client.setupPresence(code)
-      return () => client.teardownPresence()
+    const active = session?.client
+    if (active && activeCode && joined) {
+      active.setupPresence(activeCode)
+      return () => active.teardownPresence()
     }
-  }, [client, code, joined])
+  }, [session?.client, activeCode, joined])
 
   // Host engine + host migration — driven by the clock tick.
   useEffect(() => {
-    if (!client || !code || !validRoom || !uid || !joined || busyRef.current) return
+    const active = session?.client
+    if (!active || !activeCode || !validRoom || !session || !joined || busyRef.current) return
     const run = async (job: Promise<void>) => {
       busyRef.current = true
       try {
@@ -89,16 +113,16 @@ export default function App() {
       }
     }
     const storedHost = validRoom.players[validRoom.hostUid]
-    if ((!storedHost || !storedHost.online) && eligibleHost(validRoom.players) === uid) {
-      void run(client.claimHost(code))
+    if ((!storedHost || !storedHost.online) && eligibleHost(validRoom.players) === session.uid) {
+      void run(active.claimHost(activeCode))
       return
     }
-    if (validRoom.hostUid !== uid) return
+    if (validRoom.hostUid !== session.uid) return
     const action = hostAction(validRoom, now)
-    if (action.type === 'close') void run(client.closeRound(code, currentRoundIndex(validRoom)))
-    else if (action.type === 'next') void run(client.startNextRound(code, validRoom))
-    else if (action.type === 'finish') void run(client.finishGame(code))
-  }, [client, code, validRoom, uid, joined, now])
+    if (action.type === 'close') void run(active.closeRound(activeCode, currentRoundIndex(validRoom)))
+    else if (action.type === 'next') void run(active.startNextRound(activeCode, validRoom))
+    else if (action.type === 'finish') void run(active.finishGame(activeCode))
+  }, [session, activeCode, validRoom, joined, now])
 
   if (!isConfigured()) {
     return (
@@ -111,49 +135,66 @@ export default function App() {
       </div>
     )
   }
-  if (!authReady) return <div className="screen">מתחברים…</div>
-  if (!user)
-    return (
-      <div className="screen">
-        <div className="pad stack" style={{ paddingTop: 'var(--space-6)', flex: 1 }}>
-          <div>
-            <div className="kicker">מדד קרבה · משחק רשת</div>
-            <h1 className="wordmark">מלך הארץ</h1>
-          </div>
-          <p className="muted">כדי לשחק צריך להתחבר עם חשבון Google</p>
-          <div className="spacer" style={{ paddingBottom: 'var(--space-6)' }}>
-            {signInError && (
-              <p className="small" role="alert" style={{ color: '#a33', marginBottom: 'var(--space-3)' }}>
-                {signInError}
-              </p>
-            )}
-            <button
-              className="btn btn-primary btn-block bp on-accent"
-              onClick={() => {
-                setSignInError(null)
-                signInWithGoogle().catch((e: unknown) => {
-                  // closing the popup isn't an error worth shouting about
-                  if ((e as { code?: string }).code === 'auth/popup-closed-by-user') return
-                  setSignInError('ההתחברות נכשלה — נסו שוב')
-                })
-              }}
-            >
-              התחברות עם Google
-            </button>
+  if (!solo) {
+    if (!authReady) return <div className="screen">מתחברים…</div>
+    if (!user)
+      return (
+        <div className="screen">
+          <div className="pad stack" style={{ paddingTop: 'var(--space-6)', flex: 1 }}>
+            <div>
+              <div className="kicker">מדד קרבה · משחק רשת</div>
+              <h1 className="wordmark">מלך הארץ</h1>
+            </div>
+            <p className="muted">כדי לשחק צריך להתחבר עם חשבון Google</p>
+            <div className="spacer" style={{ paddingBottom: 'var(--space-6)' }}>
+              {signInError && (
+                <p className="small" role="alert" style={{ color: '#a33', marginBottom: 'var(--space-3)' }}>
+                  {signInError}
+                </p>
+              )}
+              <button
+                className="btn btn-primary btn-block bp on-accent"
+                onClick={() => {
+                  setSignInError(null)
+                  signInWithGoogle().catch((e: unknown) => {
+                    // closing the popup isn't an error worth shouting about
+                    if ((e as { code?: string }).code === 'auth/popup-closed-by-user') return
+                    setSignInError('ההתחברות נכשלה — נסו שוב')
+                  })
+                }}
+              >
+                התחברות עם Google
+              </button>
+              {import.meta.env.DEV && (
+                <button
+                  className="btn btn-block"
+                  style={{ marginTop: 'var(--space-3)' }}
+                  onClick={() => setSolo(true)}
+                >
+                  משחק מקומי
+                </button>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-    )
-  if (!client) return <div className="screen">מתחברים…</div>
+      )
+  }
+  if (!session) return <div className="screen">מתחברים…</div>
 
   const createAndEnter = async (name: string, config: RoomConfig) => {
-    void client.cleanupStaleRooms()
-    const newCode = await client.createRoom(config, name)
+    if (solo) {
+      // No hash: `codeFromHash` would reject a made-up code, and a real one in
+      // the URL would survive a reload that solo state does not.
+      setSoloCode(await session.client.createRoom(config, name))
+      return
+    }
+    void session.client.cleanupStaleRooms()
+    const newCode = await session.client.createRoom(config, name)
     window.location.hash = `#${newCode}`
   }
 
-  const defaultName = user.displayName ?? ''
-  if (!code)
+  const defaultName = session.displayName ?? ''
+  if (!activeCode)
     return (
       <Landing joinCode={null} defaultName={defaultName} onCreate={createAndEnter} onJoin={() => {}} />
     )
@@ -163,13 +204,13 @@ export default function App() {
     // are transient (cold connection, auth still propagating).
     return (
       <Landing
-        joinCode={code}
+        joinCode={activeCode}
         defaultName={defaultName}
         joinError={joinError}
         onCreate={createAndEnter}
         onJoin={(name) => {
           setJoinError(null)
-          client.joinRoom(code, name).catch((e: unknown) => {
+          session.client.joinRoom(activeCode, name).catch((e: unknown) => {
             setJoinError(
               e instanceof Error && e.message === 'room-not-found'
                 ? 'החדר לא נמצא — ייתכן שהקוד שגוי או שהמשחק כבר הסתיים'
@@ -185,8 +226,8 @@ export default function App() {
   }
 
   const phase = phaseOf(validRoom)
-  const shareUrl = `${window.location.origin}${window.location.pathname}#${code}`
-  const isHost = validRoom.hostUid === uid
+  const shareUrl = `${window.location.origin}${window.location.pathname}#${activeCode}`
+  const isHost = validRoom.hostUid === session.uid
 
   if (phase === 'lobby')
     return (
@@ -194,7 +235,8 @@ export default function App() {
         room={validRoom}
         shareUrl={shareUrl}
         isHost={isHost}
-        onStart={() => client.startGame(code, validRoom)}
+        minPlayers={solo ? 1 : 2}
+        onStart={() => session.client.startGame(activeCode, validRoom)}
       />
     )
   if (phase === 'guessing') {
@@ -203,12 +245,14 @@ export default function App() {
       <RoundView
         room={validRoom}
         nowMs={now}
-        myUid={uid}
-        myGuess={validRoom.guesses?.[i]?.[uid] ?? null}
-        onConfirm={(p) => client.submitGuess(code, i, p)}
+        myUid={session.uid}
+        myGuess={validRoom.guesses?.[i]?.[session.uid] ?? null}
+        onConfirm={(p) => session.client.submitGuess(activeCode, i, p)}
       />
     )
   }
-  if (phase === 'reveal') return <RevealView room={validRoom} nowMs={now} myUid={uid} />
-  return <FinalView room={validRoom} isHost={isHost} onPlayAgain={() => client.playAgain(code)} />
+  if (phase === 'reveal') return <RevealView room={validRoom} nowMs={now} myUid={session.uid} />
+  return (
+    <FinalView room={validRoom} isHost={isHost} onPlayAgain={() => session.client.playAgain(activeCode)} />
+  )
 }
