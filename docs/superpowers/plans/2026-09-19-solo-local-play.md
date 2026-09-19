@@ -345,7 +345,9 @@ export function createLocalRoomClient(uid: string) {
 
   // The single player is created by createRoom, so there is never anyone to
   // add. Present because the seam has it, not because solo mode needs it.
-  async function joinRoom(): Promise<void> {}
+  // The parameters are declared even though they are unused: callers pass
+  // them, and a zero-parameter function cannot be called with arguments.
+  async function joinRoom(_code: string, _name: string): Promise<void> {}
 
   function watchRoom(_code: string, cb: (room: Room | null) => void): () => void {
     watchers.add(cb)
@@ -357,7 +359,7 @@ export function createLocalRoomClient(uid: string) {
 
   // Nobody can disconnect from a room inside their own tab; the player is
   // online for as long as the room exists.
-  function setupPresence(): void {}
+  function setupPresence(_code: string): void {}
   function teardownPresence(): void {}
 
   async function startGame(_code: string, _room: Room): Promise<void> {
@@ -398,11 +400,11 @@ export function createLocalRoomClient(uid: string) {
     }))
   }
 
-  async function finishGame(): Promise<void> {
+  async function finishGame(_code: string): Promise<void> {
     mutate((current) => ({ ...current, state: 'finished', finishedAt: Date.now() }))
   }
 
-  async function playAgain(): Promise<void> {
+  async function playAgain(_code: string): Promise<void> {
     // undefined, not null: the Room type describes what RTDB reads back, where
     // a cleared key is simply absent.
     mutate((current) => ({
@@ -414,7 +416,7 @@ export function createLocalRoomClient(uid: string) {
     }))
   }
 
-  async function claimHost(): Promise<void> {
+  async function claimHost(_code: string): Promise<void> {
     mutate((current) => ({ ...current, hostUid: uid }))
   }
 
@@ -445,10 +447,13 @@ export type LocalRoomClient = ReturnType<typeof createLocalRoomClient>
 Run: `npx vitest run src/net/localRoomClient.test.ts`
 Expected: PASS, 7 tests.
 
-If the assignability test fails to compile, the mismatch is a parameter list:
-the local methods drop arguments they ignore, which TypeScript allows, but a
-*return type* mismatch it does not. Fix the local signature, never the
-`RoomClient` one.
+Every method that ignores its arguments still DECLARES them, prefixed with
+`_`. TypeScript lets a function with fewer parameters satisfy a wider
+signature, but it does not let you *call* a zero-parameter function with
+arguments — and `App.tsx` calls `finishGame(code)`, `playAgain(code)` and
+`claimHost(code)`, while the test above calls `joinRoom(code, name)` and
+`setupPresence(code)`. If the assignability test fails to compile, fix the
+local signature, never the `RoomClient` one.
 
 - [ ] **Step 5: Verify the whole suite**
 
