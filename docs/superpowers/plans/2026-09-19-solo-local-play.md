@@ -783,7 +783,16 @@ the button's click handler, holding the client in state instead of `useMemo`.
 
 - [ ] **Step 4: Prove the check can fail**
 
-Temporarily add `console.log('createLocalRoomClient')` to `src/main.tsx`, run `npm run build`, and confirm it exits non-zero naming the file. Then remove the line and re-run to confirm it passes again.
+A string literal like `'createLocalRoomClient'` never appears in a sourcemap's
+`sources` array — that array lists contributing FILE PATHS, not identifiers
+referenced in code — so `console.log('createLocalRoomClient')` in
+`src/main.tsx` would not trip this check at all. Instead, prove the check by
+actually shipping the module: temporarily add a real reference to
+`createLocalRoomClient` outside the `import.meta.env.DEV` branch (e.g. a
+module-scope `import { createLocalRoomClient } from './net/localRoomClient'`
+in `src/main.tsx`, referenced so it isn't tree-shaken as unused). Run
+`npm run build` and confirm it exits non-zero naming `localRoomClient.ts`.
+Then revert the change and re-run to confirm it passes again.
 
 A check nobody has watched fail is not a check.
 

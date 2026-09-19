@@ -64,10 +64,21 @@ every mutation replaces the room object and notifies each subscriber.
 | `startGame` / `submitGuess` / `closeRound` / `startNextRound` / `finishGame` / `playAgain` / `claimHost` | The same mutations the Firebase client performs, applied in memory |
 | `cleanupStaleRooms` | No-op |
 
-`Date.now()` stands in for `serverTimestamp()`.
-
-`serverNow()` needs no change: it is `Date.now() + offsetMs`, and with
-`watchServerOffset` never running in solo mode the offset stays 0.
+`Date.now()` stands in for `serverTimestamp()` — but not a bare call: the
+timestamps this client writes are compared elsewhere against `serverNow()`
+(`Date.now() + offsetMs`), and `watchServerOffset` is NOT gated out of solo
+mode — it runs unconditionally in `App.tsx`'s mount effect (gated only on
+Firebase being configured, which it always is via `firebase-config.ts`'s live
+key), so the offset it tracks can be nonzero before solo is ever entered. A
+client stamping bare `Date.now()` would then disagree with `serverNow()` by
+that offset on every round deadline and the reveal hold. The fix:
+`createLocalRoomClient(uid, clock: () => number = Date.now)` takes the clock
+as a parameter and uses it everywhere in place of `Date.now()`; the call site
+in `App.tsx` passes `serverNow` itself. The default keeps every existing
+caller (and the unit tests) working against the real clock. The parameter is
+NOT `serverNow` imported directly into `localRoomClient.ts` — that would pull
+a transitive `firebase/database` dependency into a module required to have
+none.
 
 ### One extraction
 
@@ -115,9 +126,19 @@ instead of trying to join a real room by that name.
 A `משחק מקומי` button under the sign-in screen, behind `import.meta.env.DEV`.
 
 Vite substitutes `import.meta.env.DEV` with `false` in a production build, so
-the branch and its import are dead code that Rolldown should drop.
-**"Should" is not "does"** — the build check in the testing section below
-asserts it rather than assuming it.
+a branch gated on it is dead code Rolldown should drop — **but a static
+`import` at module scope, or any reference outside the gated branch, ships the
+module regardless of the DEV check**, because dead-code elimination only
+removes what it can prove unreachable, and a bundler cannot fold a runtime
+value like `solo` state at compile time. That is exactly what the first cut
+of this feature did: a static import of `createLocalRoomClient` plus an
+ungated `useMemo` reference shipped the module into the production bundle
+(caught by the build check below, not assumed away). The shipped design
+instead uses a *dynamic* `import()` inside the DEV-gated `onClick`, holding
+the client in state rather than `useMemo` — that is the only reference to the
+module anywhere in the graph, which is what actually keeps it out of a
+production build. **"Should" is not "does"** — the build check in the testing
+section below asserts the result rather than assuming it.
 
 ## Error handling
 
@@ -152,12 +173,22 @@ Covers the extracted `newRoundData` once, for both callers.
 
 ### Build — the dev-only gate
 
-`scripts/check-bundle.mjs`, run as the last step of `npm run build`: it greps
-the built `dist/assets/*.js` for `createLocalRoomClient` and exits non-zero if
-it finds it. A node script rather than a vitest case, because the thing under
-test is a build artifact and the unit suite must not depend on one having been
-produced. Failing the build is the point — this is the whole claim of "dev
-only", and it is the kind of claim that silently stops being true.
+`scripts/check-bundle.mjs`, run as the last step of `npm run build`: it reads
+the built sourcemaps (`vite.config.ts` sets `build.sourcemap: 'hidden'`, which
+emits `.map` files without linking them from the JS) and checks each one's
+`sources` list for a path containing `localRoomClient`, exiting non-zero if it
+finds one. **Deliberately NOT a grep over the minified `dist/assets/*.js`**:
+Rolldown mangles every local binding to a short/single-letter name, so the
+literal string `createLocalRoomClient` never appears in the minified output
+even when the module genuinely ships — a grep-based check would report a
+false negative and give no warning that it had stopped working. The sourcemap
+route is immune to that because `sources` exists specifically to point back
+at the pre-minified file paths. The `.map` files are deleted after the check
+runs so nothing extra ships to GitHub Pages. A node script rather than a
+vitest case, because the thing under test is a build artifact and the unit
+suite must not depend on one having been produced. Failing the build is the
+point — this is the whole claim of "dev only", and it is the kind of claim
+that silently stops being true.
 
 ### E2E — `e2e/solo.spec.ts`
 
@@ -180,16 +211,19 @@ click plus the 8 s `REVEAL_MS` rather than the full 10 s timer. Three rounds
 land near 30 s, inside Playwright's 60 s default. Worth asserting directly as
 well — it is real behaviour of `derive.ts`, not an accident of the harness.
 
-It also asserts the map itself renders, which is what gives the rebuilt
-roadmap end-to-end cover: the plate's canvas panes exist, and
-`geo-detail.json` is requested and answers 200.
+**It does not assert on the map's own rendering** (the plate's canvas panes,
+the `geo-detail.json` fetch) — those belong to the roadmap rewrite, which is
+separate, unmerged work. Coupling this spec to layers that are not part of
+this branch would make it fail on a clean checkout of the branch tip; that
+coverage belongs with the roadmap work itself when it lands.
 
-**Honest limits of this spec.** It exercises the client-side game loop and the
-map. It does NOT exercise the RTDB writes, the security rules, presence, or
-host migration — everything the local client stubs out. The smoke test is
-still the only thing that covers those, and it is still failing, so
-`npm run test:e2e` stays red overall until sign-in is fixed. This spec makes
-the loop testable; it does not make the suite green.
+**Honest limits of this spec.** It exercises the client-side game loop —
+lobby, round, guess, reveal, scoring, the podium. It does NOT exercise the
+RTDB writes, the security rules, presence, or host migration — everything the
+local client stubs out — nor the map's own rendering, per the note above. The
+smoke test is still the only thing that covers the RTDB side, and it is still
+failing, so `npm run test:e2e` stays red overall until sign-in is fixed. This
+spec makes the loop testable; it does not make the suite green.
 
 The solo spec has no emulator dependency, so it should also pass standalone via
 `npx playwright test e2e/solo.spec.ts` with no Java and no emulator running.
@@ -209,6 +243,9 @@ but it is an assumption, not a fact, until it is run.
 | `src/App.tsx` | `solo` state, the `session` derivation, the dev-only button |
 | `src/net/localRoomClient.test.ts` | New |
 | `src/game/rounds.test.ts` | New |
+| `src/ui/Lobby.tsx` | `minPlayers` floor, so a solo room (one player) can start |
+| `src/ui/Lobby.test.tsx` | Covers the `minPlayers` floor |
 | `e2e/solo.spec.ts` | New |
 | `scripts/check-bundle.mjs` | New — fails the build if the local client reaches `dist` |
+| `vite.config.ts` | `build.sourcemap: 'hidden'`, which `check-bundle.mjs` reads |
 | `package.json` | `build` runs the bundle check after `vite build` |
