@@ -20,7 +20,7 @@ describe('Lobby', () => {
     expect(screen.getByText('מארח')).toBeTruthy()
     expect(screen.getByText('שחקן')).toBeTruthy()
   })
-  test('start button only for host, needs 2+ players', () => {
+  test('start button only for host, and a lone host can start', () => {
     const { rerender } = render(
       <Lobby room={room} shareUrl="u" isHost={false} onStart={vi.fn()} />,
     )
@@ -29,13 +29,13 @@ describe('Lobby', () => {
     expect(screen.getByRole('button', { name: 'התחל משחק' })).toBeEnabled()
     const solo: Room = { ...room, players: { h: room.players.h } }
     rerender(<Lobby room={solo} shareUrl="u" isHost={true} onStart={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'התחל משחק' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'התחל משחק' })).toBeEnabled()
   })
-  test('minPlayers of 1 lets a one-player room start', () => {
+  test('the lone host\'s start button actually fires onStart', () => {
     const onStart = vi.fn()
     const solo: Room = { ...room, players: { h: room.players.h } }
     render(
-      <Lobby room={solo} shareUrl="u" isHost={true} minPlayers={1} onStart={onStart} />,
+      <Lobby room={solo} shareUrl="u" isHost={true} onStart={onStart} />,
     )
     const start = screen.getByRole('button', { name: 'התחל משחק' })
     expect(start).toBeEnabled()

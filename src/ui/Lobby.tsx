@@ -6,13 +6,14 @@ interface LobbyProps {
   room: Room
   shareUrl: string
   isHost: boolean
-  /** Below this many players the game cannot start. Two for a real room —
-   *  a one-player game is a solo test room, not something to share a link to. */
-  minPlayers?: number
   onStart: () => void
 }
 
-export default function Lobby({ room, shareUrl, isHost, minPlayers = 2, onStart }: LobbyProps) {
+/** A host alone in a room can start: waiting on a second person is friction,
+ *  and a one-player game scores and reveals exactly like any other. */
+const MIN_PLAYERS = 1
+
+export default function Lobby({ room, shareUrl, isHost, onStart }: LobbyProps) {
   const players = Object.entries(room.players).sort(([, a], [, b]) => a.joinedAt - b.joinedAt)
   const whatsapp = `https://wa.me/?text=${encodeURIComponent(`בואו לשחק מלך הארץ! ${shareUrl}`)}`
   const code = shareUrl.split('#')[1] ?? ''
@@ -59,10 +60,10 @@ export default function Lobby({ room, shareUrl, isHost, minPlayers = 2, onStart 
         {isHost ? (
           <button
             className="btn btn-primary btn-block bp on-accent"
-            disabled={players.length < minPlayers}
+            disabled={players.length < MIN_PLAYERS}
             onClick={onStart}
           >
-            {players.length >= minPlayers && <Marks />}
+            {players.length >= MIN_PLAYERS && <Marks />}
             התחל משחק
           </button>
         ) : (

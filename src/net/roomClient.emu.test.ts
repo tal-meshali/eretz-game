@@ -3,6 +3,7 @@ import { deleteApp, initializeApp, type FirebaseApp } from 'firebase/app'
 import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth'
 import { connectDatabaseEmulator, get, getDatabase, ref, set } from 'firebase/database'
 import { createRoomClient, type RoomClient } from './roomClient'
+import { currentRoundIndex, hostAction, phaseOf } from '../game/derive'
 import type { Room } from '../types'
 
 const CFG = {
@@ -125,6 +126,38 @@ describe('roomClient full game flow', () => {
     const room = await waitForRoom(host.client, code, (r) => r.players[host.uid].online === false)
 
     expect(room.players[host.uid].online).toBe(false)
+  })
+
+  /* The lobby lets a host alone in a room start (Lobby's MIN_PLAYERS). Nothing
+     below the button knows about player count — but the rules and the host
+     engine are the two places that could disagree, so the whole one-player
+     loop runs here against them. */
+  test('a lone host starts, guesses and finishes without a second player', async () => {
+    const code = await host.client.createRoom({ ...CONFIG, rounds: 1 }, 'לבד')
+    let room = await waitForRoom(host.client, code, (r) => !!r.players[host.uid])
+    expect(Object.keys(room.players)).toHaveLength(1)
+    expect(phaseOf(room)).toBe('lobby')
+
+    await host.client.startGame(code, room)
+    room = await waitForRoom(host.client, code, (r) => r.state === 'playing')
+    expect(phaseOf(room)).toBe('guessing')
+    expect(room.rounds![0]!.localityId).toBeGreaterThan(0)
+
+    const i = currentRoundIndex(room)
+    await host.client.submitGuess(code, i, { lat: 31.8, lng: 35.0 })
+    room = await waitForRoom(host.client, code, (r) => !!r.guesses?.[i]?.[host.uid])
+
+    // Every online player has guessed — with one player, that is at once.
+    expect(hostAction(room, Date.now()).type).toBe('close')
+    await host.client.closeRound(code, i)
+    room = await waitForRoom(host.client, code, (r) => !!r.rounds?.[i]?.revealAt)
+    expect(phaseOf(room)).toBe('reveal')
+
+    // The only round of one, so the engine finishes rather than dealing again.
+    expect(hostAction(room, Date.now() + 60_000).type).toBe('finish')
+    await host.client.finishGame(code)
+    room = await waitForRoom(host.client, code, (r) => r.state === 'finished')
+    expect(phaseOf(room)).toBe('finished')
   })
 
   test('cleanupStaleRooms deletes only 24h+ rooms', async () => {

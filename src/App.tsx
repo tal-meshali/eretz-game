@@ -256,7 +256,6 @@ export default function App() {
         room={validRoom}
         shareUrl={shareUrl}
         isHost={isHost}
-        minPlayers={solo ? 1 : 2}
         onStart={() => session.client.startGame(activeCode, validRoom)}
       />
     )
