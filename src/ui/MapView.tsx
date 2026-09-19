@@ -46,6 +46,32 @@ const HILLSHADE =
 const OSM_CREDIT = '© OpenStreetMap'
 const HILLSHADE_CREDIT = 'Esri'
 
+/* Leaflet's canvas renderer schedules a redraw with requestAnimationFrame and
+   remembers the id in `_redrawRequest`, and `_redraw` clears that id without
+   cancelling the frame it belongs to. `_updatePaths` — which a fit, a resize
+   or a moveend reaches — calls `_redraw()` directly, so the queued frame is
+   orphaned: nothing points at it any more. Removing the map then cancels
+   `_redrawRequest`, which is already null, and `_destroyContainer` deletes
+   `_ctx`; when the orphan finally runs it draws into a renderer that no longer
+   has a context and throws "Cannot read properties of undefined (reading
+   'save')".
+
+   The window between the direct redraw and the teardown is one frame, which
+   StrictMode's mount/unmount/mount hits on every map in development and a
+   fast phase change can hit in production.
+
+   So: cancel the outstanding frame before redrawing (a no-op for the frame
+   currently running, which is what leaves the id stale in the first place),
+   and treat a redraw with no context as the nothing it is. */
+const SafeCanvas = L.Canvas.extend({
+  _redraw(this: L.Canvas & { _ctx?: CanvasRenderingContext2D; _redrawRequest?: number }) {
+    if (this._redrawRequest != null) L.Util.cancelAnimFrame(this._redrawRequest)
+    this._redrawRequest = undefined
+    if (!this._ctx) return
+    ;(L.Canvas.prototype as unknown as { _redraw: () => void })._redraw.call(this)
+  },
+}) as unknown as new (options?: L.RendererOptions) => L.Canvas
+
 const IL = byRole(PLATE, 'il')!
 // Fit is derived from the geometry itself, so rebuilding the plate reframes it.
 const ISRAEL_BOUNDS = L.geoJSON(IL as never).getBounds()
@@ -169,7 +195,7 @@ export default function MapView({
     // reorder within a canvas. Panes give the strata a fixed z-order instead.
     const strata = ['plate', 'detail', 'over'].map((name, i) => {
       map.createPane(name).style.zIndex = String(350 + i * 10)
-      return L.canvas({ pane: name, padding: 0.3 })
+      return new SafeCanvas({ pane: name, padding: 0.3 })
     })
     const [plateRenderer, detailRenderer, overRenderer] = strata
 
