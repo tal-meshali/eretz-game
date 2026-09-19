@@ -1,9 +1,12 @@
 // Fails the build if dev-only code reached the production bundle.
 //
-// `createLocalRoomClient` is behind `import.meta.env.DEV`, which Vite
-// substitutes with `false` so the branch and its import are dead code. That is
-// Rolldown's behaviour, not a guarantee in the code, and the day it changes
-// nothing else would notice — so it is asserted here rather than assumed.
+// `src/net/localRoomClient.ts`'s only reference anywhere in the module graph
+// is a dynamic `import()` inside a branch gated on `import.meta.env.DEV`
+// (see `src/App.tsx`). That keeps the module out of a production build, but
+// it is a fact about how the code is written, not a guarantee — nothing stops
+// a future edit from adding a second, ungated reference that ships the module
+// regardless. This script asserts the module is actually absent from the
+// production output rather than assuming the gate held.
 //
 // This does NOT grep the minified JS for the identifier: every local binding
 // gets mangled to a single letter, so the real export name never appears as
@@ -27,7 +30,7 @@ async function listMapFiles() {
     if (err.code === 'ENOENT') return null
     throw err
   }
-  return entries.filter((f) => f.endsWith('.js.map'))
+  return entries.filter((f) => f.endsWith('.map'))
 }
 
 const mapFiles = await listMapFiles()
@@ -36,7 +39,10 @@ if (mapFiles === null) {
   process.exit(1)
 }
 if (mapFiles.length === 0) {
-  console.error('no .js.map files in dist/assets — is build.sourcemap set to "hidden" in vite.config.ts?')
+  console.error(
+    'no .map files in dist/assets — is build.sourcemap set to "hidden" in vite.config.ts? ' +
+      '(or this script already ran once against this dist/ and deleted them — build again first)',
+  )
   process.exit(1)
 }
 
