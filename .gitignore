@@ -6,3 +6,4 @@ database-debug.log
 test-results/
 playwright-report/
 .geo-cache/
+*.zip
