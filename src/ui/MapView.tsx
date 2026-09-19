@@ -1,7 +1,10 @@
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import geo from '../data/geo.json'
+import {
+  DETAIL_SPECS, DETAIL_URL, OVERLAY_SPECS, PLATE, PLATE_SPECS, byRole, decode, readTokens,
+  type RoleFeature, type Spec, type Tokens,
+} from './mapPlate'
 
 export interface LatLng {
   lat: number
@@ -31,97 +34,56 @@ export interface MapViewProps {
   onMapReady?: (map: L.Map) => void
 }
 
-type Role = 'sea' | 'neigh' | 'ps' | 'il' | 'desert' | 'forest' | 'urban' | 'water' | 'il-line'
-
 /** Real relief under the plate. Esri World Hillshade: terrain only — no
- *  labels, no roads, nothing that could hint at an answer. */
+ *  labels, no roads, nothing that could hint at an answer. It is what the
+ *  Negev is drawn with, now that the hand-drawn "desert wash" is gone. */
 const HILLSHADE =
   'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}'
-interface GeoFeature {
-  type: 'Feature'
-  properties: { role: Role; name: string }
-  geometry: unknown
-}
 
-const FEATURES = (geo as { features: GeoFeature[] }).features
-const IL = FEATURES.find((f) => f.properties.role === 'il')!
-// Fit is derived from the geometry itself, so retrimming geo.json reframes the plate.
+/* The plate is drawn from OpenStreetMap, which is ODbL — the credit is a
+   licence term, not a courtesy, so it rides with the layer that needs it
+   rather than living in a footer some screen might not have. */
+const OSM_CREDIT = '© OpenStreetMap'
+const HILLSHADE_CREDIT = 'Esri'
+
+const IL = byRole(PLATE, 'il')!
+// Fit is derived from the geometry itself, so rebuilding the plate reframes it.
 const ISRAEL_BOUNDS = L.geoJSON(IL as never).getBounds()
 
-interface Tokens {
-  sea: string
-  land: string
-  landAlt: string
-  neigh: string
-  desert: string
-  forest: string
-  urban: string
-  water: string
-  border: string
-  borderStrong: string
-  grid: string
-  accent: string
-}
+const KM_PER_DEG_LAT = 111.32
 
-/* The plate takes its colors from the stylesheet's --map-* tokens, so the
-   design system stays the single source of truth. Fallbacks keep jsdom happy. */
-function readTokens(el: HTMLElement): Tokens {
-  const cs = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null
-  const v = (name: string, fallback: string) =>
-    (cs?.getPropertyValue(name) ?? '').trim() || fallback
-  return {
-    sea: v('--map-sea', '#d6ebff'),
-    land: v('--map-land', '#f6f6f7'),
-    landAlt: v('--map-land-alt', '#edeef0'),
-    neigh: v('--map-neigh', '#e7e7ea'),
-    desert: v('--map-desert', '#f0e8d4'),
-    forest: v('--map-forest', '#d8e3d0'),
-    urban: v('--map-urban', '#dddde1'),
-    water: v('--map-water', '#b5d9fd'),
-    border: v('--map-border', 'rgba(29,31,32,.42)'),
-    borderStrong: v('--map-border-strong', '#1d1f20'),
-    grid: v('--map-grid', 'rgba(29,31,32,.09)'),
-    accent: v('--color-accent', '#5980a6'),
-  }
-}
+/** A layer that only appears from a given zoom. Layers with no `minZoom` are
+ *  added once and never enter this list. */
+type Tier = [layer: L.Layer, minZoom: number]
 
-/* Every fill is a translucent wash so the hillshade's relief reads through;
-   the sea polygon shares its coastline with the land, so the seam is exact. */
-function styleFor(t: Tokens) {
-  return (feature?: { properties?: { role?: Role } }): L.PathOptions => {
-    switch (feature?.properties?.role) {
-      case 'sea':
-        return { fillColor: t.sea, fillOpacity: 0.8, stroke: false }
-      case 'il':
-        return { fillColor: t.land, fillOpacity: 0.42, color: t.borderStrong, weight: 1.5 }
-      case 'ps':
-        return {
-          fillColor: t.landAlt, fillOpacity: 0.5,
-          color: t.borderStrong, weight: 1, dashArray: '5 4', opacity: 0.8,
-        }
-      case 'desert':
-        return { fillColor: t.desert, fillOpacity: 0.5, stroke: false }
-      case 'forest':
-        return { fillColor: t.forest, fillOpacity: 0.55, stroke: false }
-      case 'urban':
-        return { fillColor: t.urban, fillOpacity: 0.65, stroke: false }
-      case 'water':
-        return { fillColor: t.water, fillOpacity: 0.95, stroke: false }
-      case 'il-line':
-        // The land washes cover the inner half of the border stroke, so the
-        // border is re-drawn fill-less on top (last in the feature order).
-        return { fill: false, color: t.borderStrong, weight: 1.5 }
-      default:
-        return { fillColor: t.neigh, fillOpacity: 0.65, color: t.border, weight: 1 }
+function addSpecs(
+  map: L.Map, specs: Spec[], features: RoleFeature[], t: Tokens,
+  renderer: L.Renderer, tiers: Tier[],
+) {
+  for (const spec of specs) {
+    const feature = byRole(features, spec.role)
+    if (!feature) continue
+    // The casing goes down first and under the same zoom rule, or a road would
+    // shed its outline at exactly the zoom it gains its width.
+    const passes = [spec.casing, spec.style].filter(Boolean) as ((t: Tokens) => L.PathOptions)[]
+    for (const style of passes) {
+      // The renderer rides in the style, not in the GeoJSON options: that is
+      // where Leaflet reads it from, and it is the only one of the two the
+      // typings admit to.
+      const layer = L.geoJSON(feature as never, {
+        style: { ...style(t), renderer }, interactive: false,
+      })
+      if (spec.minZoom == null) layer.addTo(map)
+      else tiers.push([layer, spec.minZoom])
     }
   }
 }
 
 /** Half-degree graticule — the survey grid the design is framed by. */
-function graticule(t: Tokens): L.Polyline[] {
+function graticule(t: Tokens, renderer: L.Renderer): L.Polyline[] {
   const b = ISRAEL_BOUNDS.pad(0.35)
   const s = b.getSouth(), n = b.getNorth(), w = b.getWest(), e = b.getEast()
-  const opts: L.PolylineOptions = { color: t.grid, weight: 1, interactive: false }
+  const opts: L.PolylineOptions = { color: t.grid, weight: 1, interactive: false, renderer }
   const lines: L.Polyline[] = []
   const first = (v: number) => Math.ceil(v * 2) / 2
   for (let lng = first(w); lng <= e; lng += 0.5) {
@@ -132,8 +94,6 @@ function graticule(t: Tokens): L.Polyline[] {
   }
   return lines
 }
-
-const KM_PER_DEG_LAT = 111.32
 
 export default function MapView({
   pins = [], rings, ringsAt = null, link = null, fitTo = null, onPick, onMapReady,
@@ -181,7 +141,7 @@ export default function MapView({
       center: [31.4, 35.0],
       zoom: 7,
       zoomSnap: 0,
-      attributionControl: false,
+      attributionControl: true,
       zoomControl: false,
       // The plate opens as a fixed survey chart, but a fingertip needs zoom:
       // Eilat is a 10 km wedge. Panning is confined to the chart itself.
@@ -200,11 +160,55 @@ export default function MapView({
       if (!fittingRef.current) userMovedRef.current = true
     })
 
-    L.tileLayer(HILLSHADE, { maxZoom: 13 }).addTo(map)
-    L.geoJSON(geo as never, { style: styleFor(t), interactive: false }).addTo(map)
-    // The grid sits above the washes — the sea is a polygon now, and the hero
-    // plate already draws its graticule over everything.
-    for (const line of graticule(t)) line.addTo(map)
+    // Canvas, not SVG: the roadmap is ~110k vertices, and an SVG path that
+    // long is re-laid-out by the browser on every pan.
+    //
+    // Three panes rather than one, because a canvas renderer draws in the
+    // order paths were handed to it: the roadmap arrives on a fetch, long
+    // after the borders and the lakes are on the map, and bringToFront cannot
+    // reorder within a canvas. Panes give the strata a fixed z-order instead.
+    const strata = ['plate', 'detail', 'over'].map((name, i) => {
+      map.createPane(name).style.zIndex = String(350 + i * 10)
+      return L.canvas({ pane: name, padding: 0.3 })
+    })
+    const [plateRenderer, detailRenderer, overRenderer] = strata
+
+    const tiers: Tier[] = []
+    const syncTiers = () => {
+      const z = map.getZoom()
+      for (const [layer, minZoom] of tiers) {
+        if (z >= minZoom) {
+          if (!map.hasLayer(layer)) layer.addTo(map)
+        } else if (map.hasLayer(layer)) map.removeLayer(layer)
+      }
+    }
+
+    map.attributionControl.setPrefix('')
+    L.tileLayer(HILLSHADE, { maxZoom: 13, attribution: HILLSHADE_CREDIT }).addTo(map)
+    map.attributionControl.addAttribution(OSM_CREDIT)
+    addSpecs(map, PLATE_SPECS, PLATE, t, plateRenderer, tiers)
+    addSpecs(map, OVERLAY_SPECS, PLATE, t, overRenderer, tiers)
+    for (const line of graticule(t, overRenderer)) line.addTo(map)
+
+    // The roadmap arrives on its own: a map that is usable the moment it opens
+    // beats one that waits on 1.6 MB before it will take a guess. A missing or
+    // broken detail file costs the roads, never the game — the plate under it
+    // is a complete, playable map.
+    let cancelled = false
+    fetch(DETAIL_URL)
+      .then((res) => {
+        if (!res.ok) throw new Error(`${DETAIL_URL} → ${res.status}`)
+        return res.json()
+      })
+      .then((topo) => {
+        if (cancelled) return
+        addSpecs(map, DETAIL_SPECS, decode(topo), t, detailRenderer, tiers)
+        syncTiers()
+      })
+      .catch(() => {})
+
+    map.on('zoomend', syncTiers)
+    syncTiers()
 
     map.on('click', (e: L.LeafletMouseEvent) => {
       onPickRef.current?.({ lat: e.latlng.lat, lng: e.latlng.lng })
@@ -225,6 +229,7 @@ export default function MapView({
       ro.observe(el)
     }
     return () => {
+      cancelled = true
       ro?.disconnect()
       map.remove()
       mapRef.current = null

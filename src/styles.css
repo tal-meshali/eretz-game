@@ -40,18 +40,26 @@
   --shadow-sm: 0 1px 2px color-mix(in srgb, #2b2b2d 14%, transparent);
 
   /* Map roles. MapView reads these off the container with getComputedStyle,
-     so the plate is retuned here and nowhere else. */
-  --map-sea: #d6ebff;
-  --map-land: #f6f6f7;
-  --map-land-alt: #edeef0;
-  --map-neigh: #e7e7ea;
-  --map-water: #b5d9fd;
-  --map-border: rgba(29, 31, 32, 0.42);
+     so the plate is retuned here and nowhere else; src/ui/mapPlate.ts names
+     the token each role reads. The territory is a warm survey cream against a
+     cool sea, and the road hierarchy is the one saturated thing on the sheet —
+     which is what makes it read at a glance the way a roadmap does. */
+  --map-sea: #cbe3f7;
+  --map-land: #f8f3e8;
+  --map-land-alt: #efe9dc;
+  --map-neigh: #e3e1dd;
+  --map-water: #a3cbec;
+  --map-river: #8fb9dd;
+  --map-builtup: #d6c7ae;
+  --map-wood: #aec78f;
+  --map-road-motorway: #a8462a;
+  --map-road-trunk: #c96f3b;
+  --map-road-primary: #e0a552;
+  --map-road-secondary: #ab9f89;
+  --map-road-casing: rgba(255, 255, 255, 0.85);
+  --map-border: rgba(29, 31, 32, 0.35);
   --map-border-strong: #1d1f20;
   --map-grid: rgba(29, 31, 32, 0.09);
-  --map-desert: #f0e8d4;
-  --map-forest: #d8e3d0;
-  --map-urban: #dddde1;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -215,8 +223,8 @@ input:focus-visible, select:focus-visible { border-color: var(--color-accent); o
   position: relative; height: 292px; flex: none; overflow: hidden;
   /* One step deeper than the plate's sea, so the wordmark has a map to sit on
      rather than a pale wash. */
-  --map-sea: #c9e3fd;
-  --map-neigh: #e2e2e6;
+  --map-sea: #bcdcf6;
+  --map-neigh: #dedcd8;
   background: var(--map-sea);
 }
 .hero > .hero-map { position: absolute; inset: 0; }
@@ -242,6 +250,24 @@ input:focus-visible, select:focus-visible { border-color: var(--color-accent); o
 .plate { position: relative; flex: 1; min-height: 44dvh; display: flex; }
 .map { flex: 1; min-height: 100%; background: var(--map-sea); }
 .map .leaflet-container { background: var(--map-sea); font: inherit; }
+/* OpenStreetMap's ODbL credit, in the readout's voice rather than Leaflet's.
+   It clears the readout bar, which owns the bottom edge, and — like the
+   readout — it must never eat a tap: Eilat sits in this very corner when the
+   plate is fitted to the whole country. The credit carries no link, so
+   nothing is lost by making it untouchable. */
+.map .leaflet-control-attribution {
+  pointer-events: none;
+  margin: 0 0 30px; padding: 1px 5px;
+  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
+  color: color-mix(in srgb, var(--color-text) 48%, transparent);
+  font-family: var(--font-heading); font-size: 8.5px; letter-spacing: .06em;
+  text-transform: uppercase; box-shadow: none;
+}
+
+/* The hillshade is relief, not a picture: desaturated and slightly held back
+   so the washes above it keep their own colour, and so the Negev — which no
+   longer carries a drawn-on desert tint — reads as the terrain it is. */
+.map .leaflet-tile-pane { filter: saturate(0) contrast(1.06); opacity: .9; }
 .readout {
   /* Purely a readout: it must never eat taps aimed at the map's southern
      edge (Eilat sits right under it in the country fit). */

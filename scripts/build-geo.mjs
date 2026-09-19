@@ -1,159 +1,389 @@
-// Rebuilds src/data/geo.json — the territorial plate the map is drawn from.
+// Rebuilds the two geometry files the map is drawn from.
 //
-//   node scripts/build-geo.mjs
+//   node scripts/build-geo.mjs          # uses .geo-cache/ when it is warm
+//   node scripts/build-geo.mjs --fresh  # re-downloads every source
 //
-// Sources (all public domain, Natural Earth 1:10m; the files blow jsdelivr's
-// 20 MB cap, so they come from raw.githubusercontent):
-//   - admin-0 countries: coastline and national borders.
-//   - lakes: the real outlines of the Kinneret and the Dead Sea basins.
-//   - urban areas (nightlights-derived): the grey built-up patches. This
-//     layer has a size floor — Eilat, for one, is under it — so it hints at
-//     the metros, not at most answers.
-// The 'sea' feature is derived: the regional window minus every country, so
-// its coast is the exact same line the land is drawn with.
+// Output is TopoJSON, not GeoJSON, for two reasons beyond size: quantization
+// snaps every layer to one shared grid, so a road and the border it runs
+// beside cannot disagree by half a metre; and arc extraction stores a line
+// shared by two polygons once, which is what keeps the Israel/West Bank seam
+// from showing a sliver.
 //
-// Schematic geometry (NOT traced from a source):
-//   - The desert wash: everything of Israel south of a hand-drawn line that
-//     approximates the 200 mm rainfall boundary (Negev, Arava, Judean
-//     desert rim), clipped to the real border.
-//   - The forest patches: hand-placed ellipses over the big KKL/natural
-//     blocks (Galilee, Carmel, Menashe, Jerusalem hills, Ben Shemen,
-//     Yatir), clipped to the real border. Indicative, not cadastral.
+//   src/data/geo-plate.json   the territorial plate — sea, neighbours, the two
+//                             exact borders, the big water bodies. Small
+//                             enough to bundle; HeroMap draws it too.
+//   public/geo-detail.json    the roadmap itself — roads by class, built-up
+//                             areas, woodland, minor water, rivers. Fetched at
+//                             runtime by MapView, so the landing page and the
+//                             first paint of the map never pay for it.
 //
-// Terrain itself is not in this file: MapView draws these features as
-// translucent washes over the Esri World Hillshade tile layer.
+// Sources, all open data:
+//   - geoBoundaries gbOpen ISR/PSE ADM0 (ODbL, OSM-derived) — the exact
+//     national borders. Natural Earth's 1:10m outline, which this file used
+//     to draw, is ~420 vertices for the whole country: the Green Line came out
+//     as a handful of straight runs and the Gaza boundary barely existed.
+//   - Natural Earth 1:10m admin-0 — the neighbours ONLY. They are flat grey
+//     context; the line that matters between them and us is Israel's own.
+//   - OpenStreetMap via Overpass (ODbL) — roads, built-up areas, woodland,
+//     water. Nothing carries a name into the output: a label on this map
+//     would hand the player the answer.
+//
+// Deliberately NOT here any more: the hand-drawn "desert wash" and the eight
+// hand-placed forest ellipses. Both were schematic geometry pretending to be
+// surveyed, and with real woodland and real built-up areas the Negev reads as
+// empty because it IS empty, which is what an Israeli roadmap shows.
 
-import { writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import pc from 'polygon-clipping'
+import { topology } from 'topojson-server'
+import {
+  fromMulti, insideTester, joinLines, ringAreaKm2, roundTo, simplifyLine, simplifyRing, toMulti,
+} from './geo-lib.mjs'
+
+const FRESH = process.argv.includes('--fresh')
+const CACHE = new URL('../.geo-cache/', import.meta.url)
+const OUT_PLATE = new URL('../src/data/geo-plate.json', import.meta.url)
+const OUT_DETAIL = new URL('../public/geo-detail.json', import.meta.url)
+
+// Overpass rejects a request with no User-Agent, and the main endpoint is
+// busy often enough that one mirror is not a plan.
+const UA = 'eretz-game-geo-build/1.0 (https://github.com/eretz-game)'
+const OVERPASS = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+]
 
 const NE = 'https://raw.githubusercontent.com/martynafford/natural-earth-geojson/master/10m'
-const SRC_ADMIN = `${NE}/cultural/ne_10m_admin_0_countries.json`
-const SRC_LAKES = `${NE}/physical/ne_10m_lakes.json`
-const SRC_URBAN = `${NE}/cultural/ne_10m_urban_areas.json`
-const OUT = new URL('../src/data/geo.json', import.meta.url)
+const GB = (iso) => `https://www.geoboundaries.org/api/current/gbOpen/${iso}/ADM0/`
 
-// Regional window: rings with no vertex inside it are dropped, which is what
-// keeps Egypt and Saudi Arabia from dragging their whole coastlines along.
-const BBOX = { w: 31, e: 39, s: 26, n: 36 }
-// Lakes and urban patches only matter where the plate is actually looked at.
-const DETAIL_BBOX = { w: 33.9, e: 36.6, s: 29.3, n: 33.5 }
-const PRECISION = 3 // ~110 m, well under one screen pixel at this scale
+// The query window. Wider than the country so a road does not stop at the
+// frame; everything is clipped to the border further down.
+const BOX = { s: 29.4, w: 34.2, n: 33.45, e: 35.95 }
+const OVERPASS_BOX = `${BOX.s},${BOX.w},${BOX.n},${BOX.e}`
+// The neighbours' window is the old regional one: it is what makes the map
+// read as a country among countries rather than a cut-out.
+const REGION = { s: 26, w: 31, n: 36, e: 39 }
 
-const NEIGHBOURS = ['Egypt', 'Jordan', 'Lebanon', 'Syria', 'Saudi Arabia']
+const PRECISION = 5 // ~1 m; quantization is what actually sets the resolution
 
-// Hand-drawn northern edge of the desert wash, west to east; the window is
-// closed far to the south/east and intersected with the real border.
-const DESERT_EDGE = [
-  [33.8, 31.42], [34.55, 31.42], [34.85, 31.3], [35.05, 31.32],
-  [35.25, 31.55], [35.4, 31.75], [35.6, 31.9],
-]
+/* ---------- sources ---------- */
 
-// Forest blocks as (centre, N-S km, E-W km) ellipses.
-const FORESTS = [
-  { name: 'Upper Galilee', lng: 35.45, lat: 33.0, nsKm: 12, ewKm: 16 },
-  { name: 'Western Galilee', lng: 35.15, lat: 33.02, nsKm: 8, ewKm: 10 },
-  { name: 'Lower Galilee', lng: 35.35, lat: 32.75, nsKm: 10, ewKm: 14 },
-  { name: 'Carmel', lng: 35.02, lat: 32.7, nsKm: 12, ewKm: 10 },
-  { name: 'Menashe', lng: 35.15, lat: 32.55, nsKm: 10, ewKm: 14 },
-  { name: 'Ben Shemen', lng: 34.98, lat: 31.95, nsKm: 8, ewKm: 10 },
-  { name: 'Jerusalem hills', lng: 35.05, lat: 31.78, nsKm: 10, ewKm: 14 },
-  { name: 'Yatir', lng: 35.05, lat: 31.35, nsKm: 9, ewKm: 14 },
-]
+await mkdir(CACHE, { recursive: true })
 
-const round = (v) => Number(v.toFixed(PRECISION))
-const inBox = (box) => ([x, y]) => x >= box.w && x <= box.e && y >= box.s && y <= box.n
-
-const toMulti = (geometry) =>
-  geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates
-
-function fromMulti(polys) {
-  const kept = polys.map((poly) => poly.map((ring) => ring.map(([x, y]) => [round(x), round(y)])))
-  if (kept.length === 0) return null
-  return kept.length === 1
-    ? { type: 'Polygon', coordinates: kept[0] }
-    : { type: 'MultiPolygon', coordinates: kept }
+async function cached(name, load) {
+  const file = new URL(`${name}.json`, CACHE)
+  if (!FRESH && existsSync(file)) return JSON.parse(await readFile(file, 'utf8'))
+  process.stdout.write(`  fetching ${name}… `)
+  const data = await load()
+  await writeFile(file, JSON.stringify(data))
+  console.log('ok')
+  return data
 }
 
-function trim(geometry, box = BBOX) {
-  return fromMulti(toMulti(geometry).filter((poly) => poly[0].some(inBox(box))))
+const getJson = async (url) => {
+  const res = await fetch(url, { headers: { 'User-Agent': UA } })
+  if (!res.ok) throw new Error(`${url} → ${res.status}`)
+  return res.json()
 }
 
-function ellipseRing({ lng, lat, nsKm, ewKm }, steps = 52) {
-  const a = nsKm / 2 / 111.32
-  const b = ewKm / 2 / (111.32 * Math.cos((lat * Math.PI) / 180))
-  const ring = []
-  for (let i = 0; i < steps; i++) {
-    const t = (i / steps) * 2 * Math.PI
-    ring.push([round(lng + b * Math.sin(t)), round(lat + a * Math.cos(t))])
+async function overpass(query) {
+  let last
+  for (const endpoint of OVERPASS) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ data: query }),
+      })
+      const text = await res.text()
+      // A busy Overpass answers 200 with an HTML error page, so the status line
+      // is not the check — the body is.
+      if (res.ok && text.startsWith('{')) return JSON.parse(text)
+      last = `${endpoint}: ${res.status} ${text.slice(0, 160)}`
+    } catch (err) {
+      // A timeout or a dropped connection is the commonest way these mirrors
+      // fail; it has to move to the next one rather than end the build.
+      last = `${endpoint}: ${err.message}`
+    }
   }
-  ring.push(ring[0])
-  return ring
+  throw new Error(`every overpass endpoint refused — ${last}`)
 }
 
-const ellipse = (spec) => ({ type: 'Polygon', coordinates: [ellipseRing(spec)] })
+// Every statement inside the union needs its own terminator; the callers below
+// read better without trailing semicolons, so this adds the one that matters.
+const osm = (name, query) =>
+  cached(name, () => overpass(`[out:json][timeout:280];(${query.replace(/;?\s*$/, '')};);out geom;`))
 
-/** Intersection with the (already trimmed) Israel geometry, or null. */
-const clipToIsrael = (geometry, israel) => {
-  const hit = pc.intersection(toMulti(israel), toMulti(geometry))
-  return hit.length ? fromMulti(hit) : null
+const geoBoundary = (iso) =>
+  cached(`border-${iso.toLowerCase()}`, async () => getJson((await getJson(GB(iso))).gjDownloadURL))
+
+/* ---------- OSM element → geometry ----------
+   `out geom` hands back member ways, not rings: a multipolygon relation has to
+   be stitched back together by matching endpoints. An unclosed leftover is
+   dropped rather than force-closed — a half-traced lake is worse than none. */
+
+const key = ([x, y]) => `${x},${y}`
+const ringsFrom = (ways) => {
+  const open = ways.map((w) => w.map(({ lat, lon }) => [lon, lat])).filter((w) => w.length > 1)
+  const rings = []
+  while (open.length) {
+    let line = open.pop()
+    let joined = true
+    while (joined && key(line[0]) !== key(line[line.length - 1])) {
+      joined = false
+      for (let i = 0; i < open.length; i++) {
+        const other = open[i]
+        const head = key(line[0])
+        const tail = key(line[line.length - 1])
+        if (key(other[0]) === tail) line = line.concat(other.slice(1))
+        else if (key(other[other.length - 1]) === tail) line = line.concat(other.slice(0, -1).reverse())
+        else if (key(other[other.length - 1]) === head) line = other.slice(0, -1).concat(line)
+        else if (key(other[0]) === head) line = other.slice(1).reverse().concat(line)
+        else continue
+        open.splice(i, 1)
+        joined = true
+        break
+      }
+    }
+    if (line.length > 3 && key(line[0]) === key(line[line.length - 1])) rings.push(line)
+  }
+  return rings
 }
 
-const fetchJson = async (url) => (await (await fetch(url)).json()).features
-const [admin, lakes, urban] = await Promise.all(
-  [SRC_ADMIN, SRC_LAKES, SRC_URBAN].map(fetchJson),
+/** Polygons from one OSM element: a closed way, or a stitched relation. */
+function polygonsOf(el) {
+  if (el.type === 'way') {
+    const ring = (el.geometry ?? []).map(({ lat, lon }) => [lon, lat])
+    if (ring.length < 4 || key(ring[0]) !== key(ring[ring.length - 1])) return []
+    return [[ring]]
+  }
+  const members = el.members ?? []
+  const outers = ringsFrom(members.filter((m) => m.role !== 'inner' && m.geometry).map((m) => m.geometry))
+  const inners = ringsFrom(members.filter((m) => m.role === 'inner' && m.geometry).map((m) => m.geometry))
+  if (!outers.length) return []
+  // Holes are dropped: at this scale an island inside a reservoir is a pixel,
+  // and keeping them would mean solving containment for every inner ring.
+  void inners
+  return outers.map((ring) => [ring])
+}
+
+const lineOf = (el) => (el.geometry ?? []).map(({ lat, lon }) => [lon, lat])
+
+/* ---------- the border ---------- */
+
+console.log('borders…')
+const isr = await geoBoundary('ISR')
+const pse = await geoBoundary('PSE')
+
+// geoBoundaries ships a handful of sub-hectare slivers on the Palestine
+// outline — digitizing noise, four vertices each, invisible and not free.
+const MIN_BORDER_KM2 = 1
+const borderPolys = (fc) =>
+  fc.features
+    .flatMap((f) => toMulti(f.geometry))
+    .filter((poly) => Math.abs(ringAreaKm2(poly[0])) >= MIN_BORDER_KM2)
+
+const BORDER_M = 15 // the line Tal called inexact; this is ~1 px at max zoom
+const simplifyPolys = (polys, metres, minKm2 = 0) =>
+  polys
+    .map((poly) => poly.map((ring) => simplifyRing(ring, metres)))
+    .filter((poly) => Math.abs(ringAreaKm2(poly[0])) >= minKm2)
+
+const ilPolys = simplifyPolys(borderPolys(isr), BORDER_M)
+const psPolys = simplifyPolys(borderPolys(pse), BORDER_M)
+const il = fromMulti(ilPolys)
+const ps = fromMulti(psPolys)
+
+// One test for "is this in the country", shared by every layer below.
+const inCountry = insideTester([...ilPolys, ...psPolys])
+
+/* ---------- the neighbours and the sea ---------- */
+
+const neighbours = await cached('neighbours', async () => {
+  const fc = await getJson(`${NE}/cultural/ne_10m_admin_0_countries.json`)
+  const want = ['Egypt', 'Jordan', 'Lebanon', 'Syria', 'Saudi Arabia']
+  return want.map((name) => {
+    const hit = fc.features.find((f) => (f.properties.NAME ?? f.properties.ADMIN) === name)
+    if (!hit) throw new Error(`country not found in source: ${name}`)
+    return { name, geometry: hit.geometry }
+  })
+})
+
+const inRegion = ([x, y]) => x >= REGION.w && x <= REGION.e && y >= REGION.s && y <= REGION.n
+const neighbourPolys = neighbours.flatMap((c) =>
+  simplifyPolys(toMulti(c.geometry).filter((poly) => poly[0].some(inRegion)), 400),
 )
 
-const find = (name) => {
-  const hit = admin.find((f) => (f.properties.NAME ?? f.properties.ADMIN) === name)
-  if (!hit) throw new Error(`country not found in source: ${name}`)
-  return hit
-}
-
-const features = []
-const push = (role, name, geometry) => {
-  if (geometry) features.push({ type: 'Feature', properties: { role, name }, geometry })
-}
-
-const countries = [...NEIGHBOURS, 'Palestine', 'Israel'].map((n) => ({
-  name: n,
-  geometry: trim(find(n).geometry),
-}))
-
-// Sea: the window minus every country — its coastline is exactly theirs.
+// The sea is the window minus every landmass, so its coast IS the land's —
+// there is no second coastline to disagree with the first.
 const rect = [[[
-  [BBOX.w, BBOX.s], [BBOX.e, BBOX.s], [BBOX.e, BBOX.n], [BBOX.w, BBOX.n], [BBOX.w, BBOX.s],
+  [REGION.w, REGION.s], [REGION.e, REGION.s], [REGION.e, REGION.n],
+  [REGION.w, REGION.n], [REGION.w, REGION.s],
 ]]]
-const sea = pc.difference(rect, ...countries.map((c) => toMulti(c.geometry)))
-push('sea', 'sea', fromMulti(sea))
+const sea = fromMulti(pc.difference(rect, [...neighbourPolys, ...ilPolys, ...psPolys]))
 
-for (const c of countries) {
-  const role = c.name === 'Israel' ? 'il' : c.name === 'Palestine' ? 'ps' : 'neigh'
-  push(role, c.name, c.geometry)
+/* ---------- the roadmap layers ---------- */
+
+console.log('openstreetmap…')
+
+const ROAD_CLASSES = {
+  motorway: ['motorway', 'motorway_link'],
+  trunk: ['trunk'],
+  primary: ['primary'],
+  secondary: ['secondary'],
 }
-const il = countries.find((c) => c.name === 'Israel').geometry
+const roadSource = await osm(
+  'roads',
+  `way["highway"~"^(motorway|motorway_link|trunk|primary|secondary)$"](${OVERPASS_BOX})`,
+)
+const builtupSource = await osm(
+  'builtup',
+  `way["landuse"~"^(residential|industrial|commercial|retail)$"](${OVERPASS_BOX});` +
+    `relation["landuse"~"^(residential|industrial|commercial|retail)$"](${OVERPASS_BOX})`,
+)
+const woodSource = await osm(
+  'wood',
+  `way["landuse"="forest"](${OVERPASS_BOX});way["natural"="wood"](${OVERPASS_BOX});` +
+    `relation["landuse"="forest"](${OVERPASS_BOX});relation["natural"="wood"](${OVERPASS_BOX})`,
+)
+const waterSource = await osm(
+  'water',
+  `way["natural"="water"](${OVERPASS_BOX});relation["natural"="water"](${OVERPASS_BOX})`,
+)
+// Rivers only, not every named wadi: the Jordan and the Yarkon are landmarks
+// a player navigates by, and a few thousand seasonal streams are texture.
+const riverSource = await osm('rivers', `way["waterway"="river"](${OVERPASS_BOX})`)
 
-// Desert wash: the edge polyline closed around everything to its south.
-const desertWindow = {
-  type: 'Polygon',
-  coordinates: [[...DESERT_EDGE, [36.2, 31.9], [36.2, 29.0], [33.8, 29.0], DESERT_EDGE[0]]],
+/** Maximal runs of in-country vertices, each carrying one vertex past the
+ *  border so a road meets the line instead of stopping short of it. */
+function clipLine(points) {
+  const out = []
+  let run = null
+  for (let i = 0; i < points.length; i++) {
+    const inside = inCountry(points[i][0], points[i][1])
+    if (inside) {
+      if (!run) {
+        run = []
+        if (i > 0) run.push(points[i - 1])
+      }
+      run.push(points[i])
+    } else if (run) {
+      run.push(points[i])
+      out.push(run)
+      run = null
+    }
+  }
+  if (run) out.push(run)
+  return out.filter((r) => r.length > 1)
 }
-push('desert', 'Negev', clipToIsrael(desertWindow, il))
-for (const f of FORESTS) push('forest', f.name, clipToIsrael(ellipse(f), il))
 
-for (const f of urban) {
-  const geometry = trim(f.geometry, DETAIL_BBOX)
-  if (geometry) push('urban', 'urban', geometry)
+/** A polygon is kept whole when any vertex is in the country — the Dead Sea
+ *  straddles the Jordanian border and a roadmap draws all of it. */
+const touchesCountry = (poly) => poly[0].some(([x, y]) => inCountry(x, y))
+
+function polygonLayer(source, { metres, minKm2 }) {
+  const polys = []
+  for (const el of source.elements ?? []) {
+    for (const poly of polygonsOf(el)) {
+      if (!touchesCountry(poly)) continue
+      const simplified = poly.map((ring) => simplifyRing(ring, metres))
+      if (Math.abs(ringAreaKm2(simplified[0])) < minKm2) continue
+      polys.push(simplified)
+    }
+  }
+  return polys
 }
 
-for (const f of lakes) {
-  const geometry = trim(f.geometry, DETAIL_BBOX)
-  if (geometry) push('water', f.properties.name ?? 'lake', geometry)
+// Join first, then clip, then simplify: joining needs the untouched OSM node
+// coordinates to recognise a shared endpoint, and simplifying a long joined
+// line drops far more vertices than simplifying its pieces one at a time.
+const ROAD_METRES = { motorway: 25, trunk: 25, primary: 30, secondary: 45 }
+const roads = {}
+for (const cls of Object.keys(ROAD_CLASSES)) {
+  const raw = (roadSource.elements ?? [])
+    .filter((el) => ROAD_CLASSES[cls].includes(el.tags?.highway))
+    .map(lineOf)
+  roads[cls] = joinLines(raw)
+    .flatMap(clipLine)
+    .map((run) => simplifyLine(run, ROAD_METRES[cls]))
+    .filter((line) => line.length > 1)
 }
 
-// The land washes above cover the inner half of Israel's border stroke, so a
-// fill-less copy of the border is re-drawn on top of everything.
-push('il-line', 'Israel', il)
+const builtup = polygonLayer(builtupSource, { metres: 45, minKm2: 0.03 })
+const wood = polygonLayer(woodSource, { metres: 60, minKm2: 0.08 })
+const allWater = polygonLayer(waterSource, { metres: 25, minKm2: 0.03 })
+// The Kinneret and the Dead Sea carry the plate: you can place half the
+// country off those two shapes, so they ship with it rather than arriving
+// late with the roadmap detail.
+const MAJOR_WATER_KM2 = 25
+const majorWater = allWater.filter((p) => Math.abs(ringAreaKm2(p[0])) >= MAJOR_WATER_KM2)
+const minorWater = allWater.filter((p) => Math.abs(ringAreaKm2(p[0])) < MAJOR_WATER_KM2)
 
-const json = JSON.stringify({ type: 'FeatureCollection', features })
-await writeFile(OUT, json)
-console.log(`geo.json — ${features.length} features, ${(json.length / 1024).toFixed(1)} kB`)
+const rivers = joinLines((riverSource.elements ?? []).map(lineOf))
+  .flatMap(clipLine)
+  .map((run) => simplifyLine(run, 45))
+  .filter((line) => line.length > 1)
+
+/* ---------- emit ---------- */
+
+const round = (coords) =>
+  Array.isArray(coords[0]) ? coords.map(round) : [roundTo(coords[0], PRECISION), roundTo(coords[1], PRECISION)]
+
+const multiPolygon = (polys) =>
+  polys.length ? { type: 'MultiPolygon', coordinates: round(polys) } : null
+const multiLine = (lines) =>
+  lines.length ? { type: 'MultiLineString', coordinates: round(lines) } : null
+
+const collection = (entries) => ({
+  type: 'FeatureCollection',
+  features: entries
+    .filter(([, geometry]) => geometry)
+    .map(([role, geometry]) => ({ type: 'Feature', properties: { role }, geometry })),
+})
+
+// 1e5 over a 1.75° x 4° window is ~1.6 m east-west and ~4.4 m north-south —
+// under the 15 m the border itself was simplified to, so quantization is not
+// what limits the shape of anything here.
+const QUANTIZE = 1e5
+
+// The arterial network ships WITH the plate, not with the roadmap detail.
+// Motorways and trunk roads are a tenth of the road vertices and most of what
+// makes the sheet legible: they give the map its highways on first paint
+// instead of after a 1.5 MB fetch, and they are what the landing hero — which
+// draws the plate and nothing else — has to look at.
+const plate = collection([
+  ['sea', sea && { type: sea.type, coordinates: round(sea.coordinates) }],
+  ['neigh', multiPolygon(neighbourPolys)],
+  ['il', { type: 'MultiPolygon', coordinates: round(ilPolys) }],
+  ['ps', { type: 'MultiPolygon', coordinates: round(psPolys) }],
+  ['water', multiPolygon(majorWater)],
+  ['road-trunk', multiLine(roads.trunk)],
+  ['road-motorway', multiLine(roads.motorway)],
+])
+
+const detail = collection([
+  ['builtup', multiPolygon(builtup)],
+  ['wood', multiPolygon(wood)],
+  ['water-minor', multiPolygon(minorWater)],
+  ['river', multiLine(rivers)],
+  ['road-secondary', multiLine(roads.secondary)],
+  ['road-primary', multiLine(roads.primary)],
+])
+
+const byRole = (fc) => Object.fromEntries(fc.features.map((f) => [f.properties.role, f]))
+
+const write = async (out, fc, label) => {
+  const topo = topology(byRole(fc), QUANTIZE)
+  const json = JSON.stringify(topo)
+  await writeFile(out, json)
+  const counts = fc.features
+    .map((f) => `${f.properties.role}:${f.geometry.coordinates.flat(2).length / 2 | 0}`)
+    .join(' ')
+  console.log(`${label} — ${(json.length / 1024).toFixed(0)} kB · ${counts}`)
+}
+
+await mkdir(new URL('../public/', import.meta.url), { recursive: true })
+await write(OUT_PLATE, plate, 'geo-plate.json')
+await write(OUT_DETAIL, detail, 'geo-detail.json')

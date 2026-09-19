@@ -80,7 +80,44 @@ official CBS (למ"ס) locality list on
 `d47a54ff-87f0-44b3-b33a-f284c0c38e5a`). The generated JSON is committed to
 the repo — run this and commit the result whenever the source data changes.
 
-## 6. Known trade-off
+## 6. Refreshing the map
+
+```bash
+npm run build:geo            # reuses .geo-cache/ when it is warm
+node scripts/build-geo.mjs --fresh   # re-downloads every source
+```
+
+Regenerates the two files the map is drawn from. Both are committed, like the
+locality list; responses are cached under `.geo-cache/` (gitignored) so a
+retune costs no downloads.
+
+| File | What is in it | Loaded |
+| --- | --- | --- |
+| `src/data/geo-plate.json` | Sea, neighbours, the two exact borders, the big lakes, the motorway and trunk network | Bundled — the landing hero draws it too |
+| `public/geo-detail.json` | Built-up areas, woodland, minor water, rivers, primary and secondary roads | Fetched by `MapView` after the map is already usable |
+
+Both are **TopoJSON**, not GeoJSON: quantization snaps every layer to one
+shared grid (so a road and the border beside it cannot disagree by half a
+metre) and delta-encoded arcs make ~150k vertices affordable. Draw order,
+colour and the zoom each layer appears at all live in
+[`src/ui/mapPlate.ts`](./src/ui/mapPlate.ts); the colours themselves are
+`--map-*` custom properties in `src/styles.css`.
+
+Sources, all open data:
+
+- **Borders** — [geoBoundaries](https://www.geoboundaries.org) gbOpen ISR/PSE
+  ADM0 (ODbL, OSM-derived).
+- **Roads, built-up areas, woodland, water** — OpenStreetMap via
+  [Overpass](https://overpass-api.de) (ODbL). Nothing carries a name into the
+  output: a label on this map would hand the player the answer.
+- **Neighbouring countries** — Natural Earth 1:10m (public domain). Flat grey
+  context only.
+- **Relief** — Esri World Hillshade tiles, at runtime.
+
+OpenStreetMap is ODbL, so the credit in the map's corner is a licence term.
+Leave it there.
+
+## 7. Known trade-off
 
 There is no server: the current round's answer lives in the shared Realtime
 Database, so a player with dev tools open could in principle peek at it. This
