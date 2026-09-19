@@ -1,9 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 
 /* The solo path: no Google popup, no Firebase, no emulator. It covers the
-   client-side loop — lobby, round, guess, reveal, scoring, the podium — and
-   that the map draws. It does NOT cover the RTDB writes, the rules, presence
-   or host migration, which only smoke.spec.ts reaches. */
+   client-side loop — lobby, round, guess, reveal, scoring, the podium. It does
+   NOT cover the RTDB writes, the rules, presence or host migration, which only
+   smoke.spec.ts reaches — nor the map rendering itself, which belongs with the
+   roadmap work (see the note above the round loop below). */
 
 const ROUNDS = 3 // the floor Landing validates: rounds >= 3, seconds >= 10
 
@@ -16,10 +17,6 @@ async function guessAndConfirm(page: Page): Promise<void> {
 }
 
 test('a solo game plays through to the podium', async ({ page }) => {
-  const detail = page.waitForResponse(
-    (r) => r.url().endsWith('geo-detail.json') && r.status() === 200,
-  )
-
   await page.goto('/')
   await page.getByRole('button', { name: 'משחק מקומי' }).click()
 
@@ -31,6 +28,13 @@ test('a solo game plays through to the podium', async ({ page }) => {
   await expect(page.getByText('חדר המתנה')).toBeVisible()
   await page.getByRole('button', { name: 'התחל משחק' }).click()
 
+  // No map-rendering assertion in this spec: the roadmap layers it was
+  // originally written against (the detail-JSON fetch, the plate's canvas
+  // strata) are not part of this branch — they are unrelated, uncommitted
+  // work-in-progress in the tree. Coupling a solo-mode test to that would
+  // make this spec fail on a clean checkout; that coverage belongs with the
+  // roadmap work itself when it lands.
+
   for (let round = 1; round <= ROUNDS; round++) {
     // The host engine holds the reveal open for REVEAL_MS (8s, derive.ts)
     // before advancing — solo's guess-triggered close only shortens the
@@ -39,16 +43,6 @@ test('a solo game plays through to the podium', async ({ page }) => {
     // first needs the longer one here.
     await expect(page.getByText(`סבב ${round} / ${ROUNDS}`)).toBeVisible({ timeout: 12_000 })
     await expect(page.locator('.locality-name')).not.toBeEmpty()
-
-    if (round === 1) {
-      // The roadmap: the detail layer was fetched, and the plate's canvas
-      // strata are on the map. Checked here, while RoundView's MapView is
-      // mounted — FinalView (the podium) has no `.map` at all, so the same
-      // assertion after the loop always finds zero elements regardless of
-      // whether the map itself ever drew correctly.
-      await detail
-      await expect(page.locator('.map canvas.leaflet-zoom-animated')).toHaveCount(3)
-    }
 
     await guessAndConfirm(page)
 
