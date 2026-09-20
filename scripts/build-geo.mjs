@@ -38,7 +38,8 @@ import { existsSync } from 'node:fs'
 import pc from 'polygon-clipping'
 import { topology } from 'topojson-server'
 import {
-  fromMulti, insideTester, joinLines, ringAreaKm2, roundTo, simplifyLine, simplifyRing, toMulti,
+  carveRing, fromMulti, insideTester, joinEnds, joinLines, nearTester, nearestWithin,
+  ringAreaKm2, roundTo, simplifyLine, simplifyRing, toMulti,
 } from './geo-lib.mjs'
 
 const FRESH = process.argv.includes('--fresh')
@@ -216,13 +217,95 @@ const neighbourPolys = neighbours.flatMap((c) =>
   simplifyPolys(toMulti(c.geometry).filter((poly) => poly[0].some(inRegion)), 400),
 )
 
-// The sea is the window minus every landmass, so its coast IS the land's —
-// there is no second coastline to disagree with the first.
+/* The two halves of every land border come from different surveys: Israel and
+   the West Bank from geoBoundaries at ~15 m, the neighbours from Natural
+   Earth 1:10m. They disagree by a median of 2.1 km along the Egyptian border
+   (4.8 km at worst) — not a simplification artifact, the sources simply draw
+   the line in different places. Nothing covers the disputed ground, so the
+   sea, which was "the window minus every landmass", claimed it and painted a
+   blue band down the Egyptian and Syrian borders.
+
+   Natural Earth also carries Israel and Palestine, and its own coverage is
+   watertight: what Egypt does not claim there, NE's Israel does. Those two
+   polygons fill the gaps and nothing else — they are never drawn as borders,
+   only as flat neighbour-grey ground under the real ones. */
+const nePlate = await cached('ne-plate-land', async () => {
+  const fc = await getJson(`${NE}/cultural/ne_10m_admin_0_countries.json`)
+  return ['Israel', 'Palestine'].map((name) => {
+    const hit = fc.features.find((f) => (f.properties.NAME ?? f.properties.ADMIN) === name)
+    if (!hit) throw new Error(`country not found in source: ${name}`)
+    return { name, geometry: hit.geometry }
+  })
+})
+
+const nePlatePolys = nePlate.flatMap((c) =>
+  simplifyPolys(toMulti(c.geometry).filter((poly) => poly[0].some(inRegion)), 400),
+)
+
 const rect = [[[
   [REGION.w, REGION.s], [REGION.e, REGION.s], [REGION.e, REGION.n],
   [REGION.w, REGION.n], [REGION.w, REGION.s],
 ]]]
-const sea = fromMulti(pc.difference(rect, [...neighbourPolys, ...ilPolys, ...psPolys]))
+
+/* Only the inland gaps. NE's coastline runs up to 1.4 km out to sea from
+   geoBoundaries', and that stretch must stay water: today's coast is the
+   drawn country's own edge and has nothing wrong with it. A gap that touches
+   a neighbour is a border gap; one that touches only sea is coastal slop. */
+const NEAR_M = 60
+const nearNeighbour = insideTester(neighbourPolys)
+const touchesNeighbour = (poly) => {
+  const d = NEAR_M / (111_320 * Math.cos((31.5 * Math.PI) / 180))
+  return poly[0].some(([x, y]) =>
+    nearNeighbour(x + d, y) || nearNeighbour(x - d, y) ||
+    nearNeighbour(x, y + d) || nearNeighbour(x, y - d),
+  )
+}
+const borderFill = pc
+  .difference(nePlatePolys, [...neighbourPolys, ...ilPolys, ...psPolys])
+  .filter(touchesNeighbour)
+
+/* The neighbours' outlines, as lines of their own rather than a stroke on the
+   ground they fill. A stroke on the ground draws every ring, and the rings
+   facing us are Natural Earth's idea of our border — a median 2.1 km from
+   geoBoundaries' and 4.8 km at worst — so the map carried a second, blurred
+   border alongside the exact one.
+
+   What makes the two separable is that the gap fill was cut against these
+   same neighbours: wherever a neighbour faces us across the disagreement, the
+   fill's far edge IS that neighbour's edge, vertex for vertex. So a vertex is
+   ours to draw unless it sits on the fill's edge, or inside the fill, or
+   inside the country — three tests and no boolean op, which matters because
+   clipping a polygon against a region bounded by its own edge is exactly what
+   polygon-clipping cannot do. What is left is the neighbours' own business:
+   Jordan with Saudi Arabia, Egypt with Jordan, Lebanon with Syria, and their
+   coasts, none of which the fill ever touched.
+
+   ON_M is "this vertex is that edge" rather than a distance worth measuring;
+   it only has to survive the clip's rounding, and at 300 m the most it can
+   cost is the one 400 m segment either side of a junction. */
+const ON_M = 300
+const onFillEdge = nearTester([...ilPolys, ...psPolys, ...borderFill], ON_M)
+const inFill = insideTester(borderFill)
+const ourGround = (x, y) => onFillEdge(x, y) || inFill(x, y) || inCountry(x, y)
+const carved = neighbourPolys.flatMap((poly) =>
+  poly.flatMap((ring) => carveRing(ring, (x, y) => !ourGround(x, y))),
+)
+
+/* Each survivor now stops at the near edge of the band, which is not where it
+   really ends: the tripoints these lines run to are ON our border, a band's
+   width further in. So every carved end is pulled the rest of the way, onto
+   the nearest point of the border itself. REACH_M is the giving-up distance —
+   the widest the band gets, rounded up — so an end that is simply nowhere
+   near us is left where it is rather than dragged across the map. */
+const REACH_M = 6000
+const ourBorder = nearestWithin([...ilPolys, ...psPolys], REACH_M)
+const neighLines = carved.map((line) => joinEnds(line, ourBorder))
+
+// The sea is the window minus every landmass, so its coast IS the land's —
+// there is no second coastline to disagree with the first.
+const sea = fromMulti(pc.difference(rect, [
+  ...neighbourPolys, ...ilPolys, ...psPolys, ...borderFill,
+]))
 
 /* ---------- the roadmap layers ---------- */
 
@@ -355,7 +438,10 @@ const QUANTIZE = 1e5
 // draws the plate and nothing else — has to look at.
 const plate = collection([
   ['sea', sea && { type: sea.type, coordinates: round(sea.coordinates) }],
-  ['neigh', multiPolygon(neighbourPolys)],
+  // The gap fill rides with the neighbours: it is the same flat grey ground,
+  // and it sits under Israel's own border wherever the two surveys differ.
+  ['neigh', multiPolygon([...neighbourPolys, ...borderFill])],
+  ['neigh-line', multiLine(neighLines)],
   ['il', { type: 'MultiPolygon', coordinates: round(ilPolys) }],
   ['ps', { type: 'MultiPolygon', coordinates: round(psPolys) }],
   ['water', multiPolygon(majorWater)],

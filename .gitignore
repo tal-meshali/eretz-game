@@ -7,3 +7,5 @@ test-results/
 playwright-report/
 .geo-cache/
 *.zip
+.claude/*
+!.claude/launch.json
