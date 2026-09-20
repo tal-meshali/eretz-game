@@ -60,6 +60,82 @@ export function insideTester(multi) {
   }
 }
 
+/* ---------- distance tests ----------
+   "Is this point within N metres of that geometry?", answered against the
+   geometry's VERTICES rather than its edges. The borders this is asked about
+   arrive at ~15 m spacing and the answers are wanted in kilometres, so the
+   nearest vertex and the nearest edge are the same answer. Bucketed into a
+   grid exactly one tolerance wide, which is what makes the 3x3 block around a
+   point enough to see everything that could be in range. */
+
+export function nearTester(multi, metres, lat = 31.5) {
+  const kx = Math.cos((lat * Math.PI) / 180)
+  const cellY = metres / M_PER_DEG
+  const cellX = cellY / kx
+  const grid = new Map()
+  for (const poly of multi) {
+    for (const ring of poly) {
+      for (const [x, y] of ring) {
+        // Flat pairs rather than points: this holds every vertex of both
+        // borders, and an array of 27k two-element arrays is all overhead.
+        const k = `${Math.floor(x / cellX)},${Math.floor(y / cellY)}`
+        const bucket = grid.get(k)
+        if (bucket) bucket.push(x, y)
+        else grid.set(k, [x, y])
+      }
+    }
+  }
+  const sqTol = cellY * cellY
+  return (x, y) => {
+    const gx = Math.floor(x / cellX)
+    const gy = Math.floor(y / cellY)
+    for (let i = -1; i <= 1; i++) {
+      for (let j = -1; j <= 1; j++) {
+        const bucket = grid.get(`${gx + i},${gy + j}`)
+        if (!bucket) continue
+        for (let n = 0; n < bucket.length; n += 2) {
+          const dx = (x - bucket[n]) * kx
+          const dy = y - bucket[n + 1]
+          if (dx * dx + dy * dy <= sqTol) return true
+        }
+      }
+    }
+    return false
+  }
+}
+
+/* ---------- carving a ring into lines ---------- */
+
+/** The runs of `ring` whose vertices all pass `keep`, as open lines. A ring
+ *  that passes everywhere comes back whole and still closed; one that fails
+ *  everywhere comes back empty. The wrap-around is the point of it: a ring
+ *  starts wherever its source happened to start, and a surviving run that
+ *  straddles that seam is one line, not two. */
+export function carveRing(ring, keep) {
+  const closed = ring.length > 2 &&
+    ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]
+  const points = closed ? ring.slice(0, -1) : ring
+  const ok = points.map(([x, y]) => keep(x, y))
+  if (ok.every(Boolean)) return [ring]
+  if (!ok.some(Boolean)) return []
+  // Start just past a vertex that failed, so no run is cut by the seam.
+  let start = 0
+  if (closed) while (ok[start]) start++
+  const out = []
+  let run = []
+  for (let i = 0; i < points.length; i++) {
+    const at = closed ? (start + i) % points.length : i
+    if (ok[at]) {
+      run.push(points[at])
+      continue
+    }
+    if (run.length > 1) out.push(run)
+    run = []
+  }
+  if (run.length > 1) out.push(run)
+  return out
+}
+
 /* ---------- simplification ----------
    Douglas-Peucker with the tolerance given in METRES, not degrees: a degree of
    longitude here is ~0.85 of a degree of latitude, so simplifying in raw

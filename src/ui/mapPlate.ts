@@ -10,7 +10,7 @@ import type { Feature, Geometry } from 'geojson'
 import plateTopo from '../data/geo-plate.json'
 
 export type PlateRole =
-  | 'sea' | 'neigh' | 'il' | 'ps' | 'water' | 'road-trunk' | 'road-motorway'
+  | 'sea' | 'neigh' | 'neigh-line' | 'il' | 'ps' | 'water' | 'road-trunk' | 'road-motorway'
 export type DetailRole =
   | 'builtup' | 'wood' | 'water-minor' | 'river' | 'road-secondary' | 'road-primary'
 export type Role = PlateRole | DetailRole
@@ -129,7 +129,12 @@ const road = (
 /** Draw order, bottom first. */
 export const PLATE_SPECS: Spec[] = [
   { role: 'sea', style: (t) => ({ fillColor: t.sea, fillOpacity: 0.85, stroke: false }) },
-  { role: 'neigh', style: (t) => ({ fillColor: t.neigh, fillOpacity: 0.8, color: t.border, weight: 1 }) },
+  // Ground and outline are separate roles because they are not the same
+  // shape: the ground runs right up to our border, the outline stops short of
+  // it. See the build script — Natural Earth's version of our border is
+  // kilometres out, so it is ground to lay the real one over, never a line.
+  { role: 'neigh', style: (t) => ({ fillColor: t.neigh, fillOpacity: 0.8, stroke: false }) },
+  { role: 'neigh-line', style: (t) => ({ color: t.border, weight: 1 }) },
   { role: 'il', style: (t) => ({ fillColor: t.land, fillOpacity: 0.62, stroke: false }) },
   { role: 'ps', style: (t) => ({ fillColor: t.landAlt, fillOpacity: 0.68, stroke: false }) },
 ]

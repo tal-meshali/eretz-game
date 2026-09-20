@@ -92,7 +92,8 @@ export default function HeroMap({ className }: { className?: string }) {
       focusable="false"
     >
       <rect x="0" y="0" width={WIDTH} height={HEIGHT} fill="var(--map-sea)" />
-      <path d={PATHS.neigh} fill="var(--map-neigh)" stroke="var(--map-border)" strokeWidth="1.6" />
+      <path d={PATHS.neigh} fill="var(--map-neigh)" />
+      <path d={PATHS['neigh-line']} fill="none" stroke="var(--map-border)" strokeWidth="1.6" />
       <path d={PATHS.il} fill="var(--map-land)" />
       <path d={PATHS.ps} fill="var(--map-land-alt)" />
       <path d={PATHS.water} fill="var(--map-water)" />

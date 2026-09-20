@@ -59,3 +59,61 @@ describe('the plate', () => {
     expect(seaIn(box(33.5, 31.6, 34.6, 33.0))).toBeGreaterThan(10_000)
   })
 })
+
+/* The same disagreement, drawn instead of filled. The neighbours' ground runs
+   right up to our border; their OUTLINE must not, because Natural Earth's
+   idea of where that border is lands kilometres away from geoBoundaries' and
+   the map would carry two borders, one of them wrong. The build cuts the
+   outline back 6 km clear. */
+describe('the neighbours\' outline', () => {
+  const border = [byRole(PLATE, 'il')!, byRole(PLATE, 'ps')!].flatMap((f) => {
+    const g = f.geometry
+    if (g.type !== 'MultiPolygon') throw new Error(`${f.role} is ${g.type}, not an area`)
+    return (g.coordinates as Ring[][]).flat(2)
+  })
+
+  const lines = (() => {
+    const g = byRole(PLATE, 'neigh-line')!.geometry
+    if (g.type === 'LineString') return [g.coordinates] as Ring[]
+    if (g.type === 'MultiLineString') return g.coordinates as Ring[]
+    throw new Error(`the outline is ${g.type}, not a line`)
+  })()
+
+  /** Nearest border vertex, in km. Brute force over a grid of the border. */
+  const CELL = 0.06
+  const KX = 111.32 * Math.cos((31.5 * Math.PI) / 180)
+  const grid = new Map<string, [number, number][]>()
+  for (const [x, y] of border) {
+    const k = `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`
+    const bucket = grid.get(k)
+    if (bucket) bucket.push([x, y])
+    else grid.set(k, [[x, y]])
+  }
+  const distKm = (x: number, y: number) => {
+    let best = Infinity
+    const cx = Math.floor(x / CELL)
+    const cy = Math.floor(y / CELL)
+    for (let i = -2; i <= 2; i++) {
+      for (let j = -2; j <= 2; j++) {
+        for (const [bx, by] of grid.get(`${cx + i},${cy + j}`) ?? []) {
+          best = Math.min(best, Math.hypot((x - bx) * KX, (y - by) * 111.32))
+        }
+      }
+    }
+    return best
+  }
+
+  test('never runs alongside our own border', () => {
+    let closest = Infinity
+    for (const line of lines) {
+      for (const [x, y] of line) closest = Math.min(closest, distKm(x!, y!))
+    }
+    expect(closest).toBeGreaterThan(6)
+  })
+
+  // The other way that test could pass is an empty outline, which would take
+  // Jordan's border with Saudi Arabia and Lebanon's with Syria with it.
+  test('the neighbours still have borders of their own', () => {
+    expect(lines.flat().length).toBeGreaterThan(1_000)
+  })
+})

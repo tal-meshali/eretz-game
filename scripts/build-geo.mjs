@@ -38,7 +38,8 @@ import { existsSync } from 'node:fs'
 import pc from 'polygon-clipping'
 import { topology } from 'topojson-server'
 import {
-  fromMulti, insideTester, joinLines, ringAreaKm2, roundTo, simplifyLine, simplifyRing, toMulti,
+  carveRing, fromMulti, insideTester, joinLines, nearTester, ringAreaKm2, roundTo,
+  simplifyLine, simplifyRing, toMulti,
 } from './geo-lib.mjs'
 
 const FRESH = process.argv.includes('--fresh')
@@ -263,6 +264,25 @@ const borderFill = pc
   .difference(nePlatePolys, [...neighbourPolys, ...ilPolys, ...psPolys])
   .filter(touchesNeighbour)
 
+/* The neighbours' outlines, as lines of their own rather than a stroke on the
+   ground they fill. A stroke on the ground draws every ring, and the rings
+   facing us are Natural Earth's idea of our border — the same idea that is a
+   median 2.1 km out and 4.8 km at worst, so the map carried a second, blurred
+   border beside the exact one. (The gap fill made that worse, not better: its
+   Israel-facing side sits exactly on the real border and its other side is
+   NE's, so the two lines were drawn at their furthest apart.)
+
+   So the outlines are cut back wherever they come within CUT_M of our border,
+   and what is left is the neighbours' own business — Jordan with Saudi Arabia,
+   Egypt with Jordan, Lebanon with Syria, and their coasts. The cut is a
+   kilometre clear of the worst disagreement, which is how a line stops short
+   of our border instead of ending somewhere inside the ambiguity. */
+const CUT_M = 6000
+const alongOurBorder = nearTester([...ilPolys, ...psPolys], CUT_M)
+const neighLines = [...neighbourPolys, ...borderFill].flatMap((poly) =>
+  poly.flatMap((ring) => carveRing(ring, (x, y) => !alongOurBorder(x, y))),
+)
+
 // The sea is the window minus every landmass, so its coast IS the land's —
 // there is no second coastline to disagree with the first.
 const sea = fromMulti(pc.difference(rect, [
@@ -403,6 +423,7 @@ const plate = collection([
   // The gap fill rides with the neighbours: it is the same flat grey ground,
   // and it sits under Israel's own border wherever the two surveys differ.
   ['neigh', multiPolygon([...neighbourPolys, ...borderFill])],
+  ['neigh-line', multiLine(neighLines)],
   ['il', { type: 'MultiPolygon', coordinates: round(ilPolys) }],
   ['ps', { type: 'MultiPolygon', coordinates: round(psPolys) }],
   ['water', multiPolygon(majorWater)],
