@@ -216,13 +216,58 @@ const neighbourPolys = neighbours.flatMap((c) =>
   simplifyPolys(toMulti(c.geometry).filter((poly) => poly[0].some(inRegion)), 400),
 )
 
-// The sea is the window minus every landmass, so its coast IS the land's —
-// there is no second coastline to disagree with the first.
+/* The two halves of every land border come from different surveys: Israel and
+   the West Bank from geoBoundaries at ~15 m, the neighbours from Natural
+   Earth 1:10m. They disagree by a median of 2.1 km along the Egyptian border
+   (4.8 km at worst) — not a simplification artifact, the sources simply draw
+   the line in different places. Nothing covers the disputed ground, so the
+   sea, which was "the window minus every landmass", claimed it and painted a
+   blue band down the Egyptian and Syrian borders.
+
+   Natural Earth also carries Israel and Palestine, and its own coverage is
+   watertight: what Egypt does not claim there, NE's Israel does. Those two
+   polygons fill the gaps and nothing else — they are never drawn as borders,
+   only as flat neighbour-grey ground under the real ones. */
+const nePlate = await cached('ne-plate-land', async () => {
+  const fc = await getJson(`${NE}/cultural/ne_10m_admin_0_countries.json`)
+  return ['Israel', 'Palestine'].map((name) => {
+    const hit = fc.features.find((f) => (f.properties.NAME ?? f.properties.ADMIN) === name)
+    if (!hit) throw new Error(`country not found in source: ${name}`)
+    return { name, geometry: hit.geometry }
+  })
+})
+
+const nePlatePolys = nePlate.flatMap((c) =>
+  simplifyPolys(toMulti(c.geometry).filter((poly) => poly[0].some(inRegion)), 400),
+)
+
 const rect = [[[
   [REGION.w, REGION.s], [REGION.e, REGION.s], [REGION.e, REGION.n],
   [REGION.w, REGION.n], [REGION.w, REGION.s],
 ]]]
-const sea = fromMulti(pc.difference(rect, [...neighbourPolys, ...ilPolys, ...psPolys]))
+
+/* Only the inland gaps. NE's coastline runs up to 1.4 km out to sea from
+   geoBoundaries', and that stretch must stay water: today's coast is the
+   drawn country's own edge and has nothing wrong with it. A gap that touches
+   a neighbour is a border gap; one that touches only sea is coastal slop. */
+const NEAR_M = 60
+const nearNeighbour = insideTester(neighbourPolys)
+const touchesNeighbour = (poly) => {
+  const d = NEAR_M / (111_320 * Math.cos((31.5 * Math.PI) / 180))
+  return poly[0].some(([x, y]) =>
+    nearNeighbour(x + d, y) || nearNeighbour(x - d, y) ||
+    nearNeighbour(x, y + d) || nearNeighbour(x, y - d),
+  )
+}
+const borderFill = pc
+  .difference(nePlatePolys, [...neighbourPolys, ...ilPolys, ...psPolys])
+  .filter(touchesNeighbour)
+
+// The sea is the window minus every landmass, so its coast IS the land's —
+// there is no second coastline to disagree with the first.
+const sea = fromMulti(pc.difference(rect, [
+  ...neighbourPolys, ...ilPolys, ...psPolys, ...borderFill,
+]))
 
 /* ---------- the roadmap layers ---------- */
 
@@ -355,7 +400,9 @@ const QUANTIZE = 1e5
 // draws the plate and nothing else — has to look at.
 const plate = collection([
   ['sea', sea && { type: sea.type, coordinates: round(sea.coordinates) }],
-  ['neigh', multiPolygon(neighbourPolys)],
+  // The gap fill rides with the neighbours: it is the same flat grey ground,
+  // and it sits under Israel's own border wherever the two surveys differ.
+  ['neigh', multiPolygon([...neighbourPolys, ...borderFill])],
   ['il', { type: 'MultiPolygon', coordinates: round(ilPolys) }],
   ['ps', { type: 'MultiPolygon', coordinates: round(psPolys) }],
   ['water', multiPolygon(majorWater)],
