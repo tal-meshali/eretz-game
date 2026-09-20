@@ -61,10 +61,11 @@ describe('the plate', () => {
 })
 
 /* The same disagreement, drawn instead of filled. The neighbours' ground runs
-   right up to our border; their OUTLINE must not, because Natural Earth's
-   idea of where that border is lands kilometres away from geoBoundaries' and
-   the map would carry two borders, one of them wrong. The build cuts the
-   outline back 6 km clear. */
+   right up to our border; their OUTLINE must not, because Natural Earth's idea
+   of where that border is lands kilometres away from geoBoundaries' and the
+   map would carry two borders, one of them wrong. What is left is the
+   neighbours' own business — Jordan with Saudi Arabia, Egypt with Jordan,
+   Lebanon with Syria — and those run TO our border and end on it. */
 describe('the neighbours\' outline', () => {
   const border = [byRole(PLATE, 'il')!, byRole(PLATE, 'ps')!].flatMap((f) => {
     const g = f.geometry
@@ -79,24 +80,27 @@ describe('the neighbours\' outline', () => {
     throw new Error(`the outline is ${g.type}, not a line`)
   })()
 
-  /** Nearest border vertex, in km. Brute force over a grid of the border. */
+  const closed = (line: Ring) =>
+    line[0]![0] === line[line.length - 1]![0] && line[0]![1] === line[line.length - 1]![1]
+
+  /** Distance to the nearest border vertex in km, off a grid of them. */
   const CELL = 0.06
   const KX = 111.32 * Math.cos((31.5 * Math.PI) / 180)
   const grid = new Map<string, [number, number][]>()
   for (const [x, y] of border) {
-    const k = `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`
+    const k = `${Math.floor(x! / CELL)},${Math.floor(y! / CELL)}`
     const bucket = grid.get(k)
-    if (bucket) bucket.push([x, y])
-    else grid.set(k, [[x, y]])
+    if (bucket) bucket.push([x!, y!])
+    else grid.set(k, [[x!, y!]])
   }
-  const distKm = (x: number, y: number) => {
+  const distKm = ([x, y]: number[]) => {
     let best = Infinity
-    const cx = Math.floor(x / CELL)
-    const cy = Math.floor(y / CELL)
-    for (let i = -2; i <= 2; i++) {
-      for (let j = -2; j <= 2; j++) {
+    const cx = Math.floor(x! / CELL)
+    const cy = Math.floor(y! / CELL)
+    for (let i = -3; i <= 3; i++) {
+      for (let j = -3; j <= 3; j++) {
         for (const [bx, by] of grid.get(`${cx + i},${cy + j}`) ?? []) {
-          best = Math.min(best, Math.hypot((x - bx) * KX, (y - by) * 111.32))
+          best = Math.min(best, Math.hypot((x! - bx) * KX, (y! - by) * 111.32))
         }
       }
     }
@@ -104,16 +108,33 @@ describe('the neighbours\' outline', () => {
   }
 
   test('never runs alongside our own border', () => {
-    let closest = Infinity
+    // Only the last few vertices of a line may come near our border — that is
+    // it arriving. Anything nearby further in is a second border being drawn.
+    const alongside: string[] = []
     for (const line of lines) {
-      for (const [x, y] of line) closest = Math.min(closest, distKm(x!, y!))
+      for (const [i, point] of line.entries()) {
+        const fromEnd = Math.min(i, line.length - 1 - i)
+        if (fromEnd > 4 && distKm(point) < 5) alongside.push(`${point} at ${i}/${line.length}`)
+      }
     }
-    expect(closest).toBeGreaterThan(6)
+    expect(alongside).toEqual([])
   })
 
-  // The other way that test could pass is an empty outline, which would take
+  test('no line is left dangling', () => {
+    // An end is either on our border — where these borders really end — or it
+    // is another line's end, which is how Lebanon and Syria meet on Hermon.
+    const ends = lines.filter((l) => !closed(l)).flatMap((l) => [l[0]!, l[l.length - 1]!])
+    const loose = ends.filter((end, i) => {
+      if (distKm(end) < 0.05) return false
+      return !ends.some((o, j) => j !== i && o[0] === end[0] && o[1] === end[1])
+    })
+    expect(loose).toEqual([])
+  })
+
+  // The other way those could pass is an empty outline, which would take
   // Jordan's border with Saudi Arabia and Lebanon's with Syria with it.
   test('the neighbours still have borders of their own', () => {
     expect(lines.flat().length).toBeGreaterThan(1_000)
+    expect(lines.filter((l) => !closed(l)).length).toBeGreaterThan(2)
   })
 })

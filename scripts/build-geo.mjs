@@ -38,8 +38,8 @@ import { existsSync } from 'node:fs'
 import pc from 'polygon-clipping'
 import { topology } from 'topojson-server'
 import {
-  carveRing, fromMulti, insideTester, joinLines, nearTester, ringAreaKm2, roundTo,
-  simplifyLine, simplifyRing, toMulti,
+  carveRing, fromMulti, insideTester, joinEnds, joinLines, nearTester, nearestWithin,
+  ringAreaKm2, roundTo, simplifyLine, simplifyRing, toMulti,
 } from './geo-lib.mjs'
 
 const FRESH = process.argv.includes('--fresh')
@@ -266,22 +266,40 @@ const borderFill = pc
 
 /* The neighbours' outlines, as lines of their own rather than a stroke on the
    ground they fill. A stroke on the ground draws every ring, and the rings
-   facing us are Natural Earth's idea of our border — the same idea that is a
-   median 2.1 km out and 4.8 km at worst, so the map carried a second, blurred
-   border beside the exact one. (The gap fill made that worse, not better: its
-   Israel-facing side sits exactly on the real border and its other side is
-   NE's, so the two lines were drawn at their furthest apart.)
+   facing us are Natural Earth's idea of our border — a median 2.1 km from
+   geoBoundaries' and 4.8 km at worst — so the map carried a second, blurred
+   border alongside the exact one.
 
-   So the outlines are cut back wherever they come within CUT_M of our border,
-   and what is left is the neighbours' own business — Jordan with Saudi Arabia,
-   Egypt with Jordan, Lebanon with Syria, and their coasts. The cut is a
-   kilometre clear of the worst disagreement, which is how a line stops short
-   of our border instead of ending somewhere inside the ambiguity. */
-const CUT_M = 6000
-const alongOurBorder = nearTester([...ilPolys, ...psPolys], CUT_M)
-const neighLines = [...neighbourPolys, ...borderFill].flatMap((poly) =>
-  poly.flatMap((ring) => carveRing(ring, (x, y) => !alongOurBorder(x, y))),
+   What makes the two separable is that the gap fill was cut against these
+   same neighbours: wherever a neighbour faces us across the disagreement, the
+   fill's far edge IS that neighbour's edge, vertex for vertex. So a vertex is
+   ours to draw unless it sits on the fill's edge, or inside the fill, or
+   inside the country — three tests and no boolean op, which matters because
+   clipping a polygon against a region bounded by its own edge is exactly what
+   polygon-clipping cannot do. What is left is the neighbours' own business:
+   Jordan with Saudi Arabia, Egypt with Jordan, Lebanon with Syria, and their
+   coasts, none of which the fill ever touched.
+
+   ON_M is "this vertex is that edge" rather than a distance worth measuring;
+   it only has to survive the clip's rounding, and at 300 m the most it can
+   cost is the one 400 m segment either side of a junction. */
+const ON_M = 300
+const onFillEdge = nearTester([...ilPolys, ...psPolys, ...borderFill], ON_M)
+const inFill = insideTester(borderFill)
+const ourGround = (x, y) => onFillEdge(x, y) || inFill(x, y) || inCountry(x, y)
+const carved = neighbourPolys.flatMap((poly) =>
+  poly.flatMap((ring) => carveRing(ring, (x, y) => !ourGround(x, y))),
 )
+
+/* Each survivor now stops at the near edge of the band, which is not where it
+   really ends: the tripoints these lines run to are ON our border, a band's
+   width further in. So every carved end is pulled the rest of the way, onto
+   the nearest point of the border itself. REACH_M is the giving-up distance —
+   the widest the band gets, rounded up — so an end that is simply nowhere
+   near us is left where it is rather than dragged across the map. */
+const REACH_M = 6000
+const ourBorder = nearestWithin([...ilPolys, ...psPolys], REACH_M)
+const neighLines = carved.map((line) => joinEnds(line, ourBorder))
 
 // The sea is the window minus every landmass, so its coast IS the land's —
 // there is no second coastline to disagree with the first.

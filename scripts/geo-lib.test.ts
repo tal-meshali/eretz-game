@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
-  carveRing, insideTester, joinLines, nearTester, ringAreaKm2, simplifyLine, simplifyRing,
+  carveRing, insideTester, joinEnds, joinLines, nearTester, nearestWithin, ringAreaKm2,
+  simplifyLine, simplifyRing,
 } from './geo-lib.mjs'
 
 const square = (x: number, y: number, size: number) => [
@@ -69,7 +70,8 @@ describe('nearTester', () => {
 
 describe('carveRing', () => {
   const ring = square(0, 0, 4)
-  const west = ([x]: number[]) => x! < 2
+  const dips = [[0, 0], [1, 0], [2, -5], [3, -5], [4, 0], [5, 0]]
+  const above = (_x: number, y: number) => y >= 0
 
   test('a ring that passes everywhere comes back closed and whole', () => {
     expect(carveRing(ring, () => true)).toEqual([ring])
@@ -80,26 +82,48 @@ describe('carveRing', () => {
   })
 
   test('a surviving run straddling the ring seam stays one line', () => {
-    // square() starts at the south-west corner, so the kept vertices are the
-    // first, the last two and the closing repeat — four corners of one run
-    // that a naive scan would report as two.
-    const out = carveRing(ring, (x, y) => west([x, y]))
-    expect(out).toEqual([[[0, 4], [0, 0]]])
-  })
-
-  test('two separate runs stay separate', () => {
-    // A zig-zag whose middle dips below the line: the ends survive, the
-    // middle does not, and the ring seam is not in either run.
-    const line = [[0, 0], [1, 0], [2, -5], [3, -5], [4, 0], [5, 0]]
-    expect(carveRing(line, (_x, y) => y >= 0)).toEqual([
-      [[0, 0], [1, 0]],
-      [[4, 0], [5, 0]],
+    // square() starts at the south-west corner, so the west side survives as
+    // one run that a naive scan would report as two.
+    const out = carveRing(ring, (x: number) => x < 2)
+    expect(out).toHaveLength(1)
+    // It is cut mid-segment at x = 2, on both the top and the bottom edge.
+    expect(out[0]!.map(([x, y]) => [Math.round(x * 1e4) / 1e4, y])).toEqual([
+      [2, 4], [0, 4], [0, 0], [2, 0],
     ])
   })
 
+  test('two separate runs stay separate', () => {
+    expect(carveRing(dips, above)).toEqual([[[0, 0], [1, 0]], [[4, 0], [5, 0]]])
+  })
+
   test('a lone surviving vertex is not a line', () => {
-    const line = [[0, 0], [1, -5], [2, 0], [3, -5], [4, 0]]
-    expect(carveRing(line, (_x, y) => y >= 0)).toEqual([])
+    expect(carveRing([[0, 0], [1, -5], [2, 0], [3, -5], [4, 0]], above)).toEqual([])
+  })
+
+  test('the cut lands where the test flips, not at the vertex before it', () => {
+    // One 100-long segment dropping away: stopping at the vertex would end the
+    // line 100 short of the edge, which is the whole point of cutting it.
+    const out = carveRing([[0, 0], [100, 0], [100, -1]], (x: number) => x < 30)
+    expect(out).toHaveLength(1)
+    expect(out[0]![1]![0]).toBeCloseTo(30, 3)
+  })
+})
+
+describe('joinEnds', () => {
+  const border = nearestWithin([[square(10, 0, 4)]], 2_000_000)
+
+  test('both ends are pulled onto the nearest point', () => {
+    expect(joinEnds([[0, 0], [5, 0]], border)).toEqual([[10, 0], [0, 0], [5, 0], [10, 0]])
+  })
+
+  test('a closed ring has no ends to pull', () => {
+    const ring = square(0, 0, 4)
+    expect(joinEnds(ring, border)).toEqual(ring)
+  })
+
+  test('an end with nothing in range is left where it is', () => {
+    const far = nearestWithin([[square(10, 0, 4)]], 1)
+    expect(joinEnds([[0, 0], [5, 0]], far)).toEqual([[0, 0], [5, 0]])
   })
 })
 

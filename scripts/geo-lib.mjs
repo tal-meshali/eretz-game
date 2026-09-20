@@ -61,14 +61,15 @@ export function insideTester(multi) {
 }
 
 /* ---------- distance tests ----------
-   "Is this point within N metres of that geometry?", answered against the
-   geometry's VERTICES rather than its edges. The borders this is asked about
-   arrive at ~15 m spacing and the answers are wanted in kilometres, so the
-   nearest vertex and the nearest edge are the same answer. Bucketed into a
+   "What of that geometry is within N metres of this point?", answered against
+   the geometry's VERTICES rather than its edges. The borders this is asked
+   about arrive at ~15 m spacing and the answers are wanted in kilometres, so
+   the nearest vertex and the nearest edge are the same answer. Bucketed into a
    grid exactly one tolerance wide, which is what makes the 3x3 block around a
    point enough to see everything that could be in range. */
 
-export function nearTester(multi, metres, lat = 31.5) {
+/** The nearest vertex of `multi`, or null when none is within `metres`. */
+export function nearestWithin(multi, metres, lat = 31.5) {
   const kx = Math.cos((lat * Math.PI) / 180)
   const cellY = metres / M_PER_DEG
   const cellX = cellY / kx
@@ -87,6 +88,8 @@ export function nearTester(multi, metres, lat = 31.5) {
   }
   const sqTol = cellY * cellY
   return (x, y) => {
+    let best = null
+    let bestSq = sqTol
     const gx = Math.floor(x / cellX)
     const gy = Math.floor(y / cellY)
     for (let i = -1; i <= 1; i++) {
@@ -96,19 +99,47 @@ export function nearTester(multi, metres, lat = 31.5) {
         for (let n = 0; n < bucket.length; n += 2) {
           const dx = (x - bucket[n]) * kx
           const dy = y - bucket[n + 1]
-          if (dx * dx + dy * dy <= sqTol) return true
+          const sq = dx * dx + dy * dy
+          if (sq <= bestSq) {
+            bestSq = sq
+            best = [bucket[n], bucket[n + 1]]
+          }
         }
       }
     }
-    return false
+    return best
   }
+}
+
+/** Whether anything of `multi` is within `metres`. */
+export function nearTester(multi, metres, lat = 31.5) {
+  const nearest = nearestWithin(multi, metres, lat)
+  return (x, y) => nearest(x, y) !== null
 }
 
 /* ---------- carving a ring into lines ---------- */
 
-/** The runs of `ring` whose vertices all pass `keep`, as open lines. A ring
- *  that passes everywhere comes back whole and still closed; one that fails
- *  everywhere comes back empty. The wrap-around is the point of it: a ring
+/** Where along a→b the test flips, to within a millimetre, as the point on
+ *  the side `kept` was on. Twenty halvings is exact enough for a segment of
+ *  any length these sources produce. */
+function crossing(a, b, keep, kept) {
+  const at = (t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) / 2
+    if (keep(...at(mid)) === kept) lo = mid
+    else hi = mid
+  }
+  return at(kept ? lo : hi)
+}
+
+/** The runs of `ring` that pass `keep`, as open lines, each cut at the point
+ *  where the test flips rather than at the last vertex before it — one segment
+ *  of a coarse coastline can be twenty kilometres long, and a line that stops
+ *  a segment early stops in the middle of nowhere. A ring that passes
+ *  everywhere comes back whole and still closed; one that fails everywhere
+ *  comes back empty. The wrap-around is the other half of the point: a ring
  *  starts wherever its source happened to start, and a surviving run that
  *  straddles that seam is one line, not two. */
 export function carveRing(ring, keep) {
@@ -118,22 +149,54 @@ export function carveRing(ring, keep) {
   const ok = points.map(([x, y]) => keep(x, y))
   if (ok.every(Boolean)) return [ring]
   if (!ok.some(Boolean)) return []
-  // Start just past a vertex that failed, so no run is cut by the seam.
-  let start = 0
-  if (closed) while (ok[start]) start++
+  // Walk from a vertex that failed, so no run is cut by the seam — and for a
+  // ring, back round to it, so the segment closing the ring is walked too.
+  let first = 0
+  if (closed) while (ok[first]) first++
+  const walk = points.map((_, i) => (closed ? (first + i) % points.length : i))
+  if (closed) walk.push(first)
+
   const out = []
   let run = []
-  for (let i = 0; i < points.length; i++) {
-    const at = closed ? (start + i) % points.length : i
-    if (ok[at]) {
-      run.push(points[at])
-      continue
-    }
+  // A crossing that lands on the vertex it was cut from — the test flipped at
+  // a vertex, not between two — is the same point twice.
+  const SAME = 1e-5 // ~1 m, a tenth of what the sources here resolve
+  const add = (p) => {
+    const last = run[run.length - 1]
+    if (!last || Math.abs(last[0] - p[0]) > SAME || Math.abs(last[1] - p[1]) > SAME) run.push(p)
+  }
+  const flush = () => {
     if (run.length > 1) out.push(run)
     run = []
   }
-  if (run.length > 1) out.push(run)
+  for (let i = 0; i < walk.length; i++) {
+    const at = walk[i]
+    if (ok[at]) add(points[at])
+    const next = walk[i + 1]
+    if (next === undefined) break
+    if (ok[at] === ok[next]) continue
+    add(crossing(points[at], points[next], keep, ok[at]))
+    if (ok[at]) flush()
+  }
+  flush()
   return out
+}
+
+/** An open line's two ends pulled out to `nearest` — the closest point of some
+ *  other geometry, or null where there is none in range. A closed ring is
+ *  returned untouched, and so is an end with nothing in range.
+ *
+ *  This is what stops a carved line from dangling. The carve ends a line at
+ *  the edge of whatever it was carving away, and that edge is rarely where the
+ *  line really ends: these are borders running to a tripoint, and a border
+ *  that stops short of one reads as a mistake, which it is. */
+export function joinEnds(line, nearest) {
+  if (line.length < 2) return line
+  const last = line.length - 1
+  if (line[0][0] === line[last][0] && line[0][1] === line[last][1]) return line
+  const head = nearest(line[0][0], line[0][1])
+  const tail = nearest(line[last][0], line[last][1])
+  return [...(head ? [head] : []), ...line, ...(tail ? [tail] : [])]
 }
 
 /* ---------- simplification ----------
